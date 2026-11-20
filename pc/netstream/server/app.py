@@ -22,6 +22,8 @@ START_BURST_MS = 500    # 처음 0.5초 분량은 바로 보냄
 CATCH_UP_RATE = 2.0     # 그 뒤엔 2배속까지만. 한번에 쏟으면 대역폭 제한에 걸려서 손실남
 RTX_BUFFER_PACKETS = 4096  # 재전송용 보관 개수 (약 5MB)
 MAX_NACK_SEQS = 200
+RTX_BUDGET = 0.25        # 재전송은 보낸 데이터의 25%까지만 (NACK 폭주 방지)
+RTX_BUCKET = 64 * 1024   # 안 쓴 예산은 이만큼까지만 모아둠
 
 
 class Stream:
@@ -39,6 +41,7 @@ class Stream:
         self.next_seq = 0
         self.finished = False
         self._rtx: OrderedDict[int, tuple[int, bytes]] = OrderedDict()
+        self._rtx_tokens = float(RTX_BUCKET)
         self._proc: asyncio.subprocess.Process | None = None
         self._task: asyncio.Task | None = None
         self._loop = asyncio.get_running_loop()
@@ -153,6 +156,7 @@ class Stream:
         counters.sent_bytes += len(packet)
         if self.mode == "udp":
             self._rtx[seq] = (media_ms, payload)
+            self._rtx_tokens = min(RTX_BUCKET, self._rtx_tokens + len(packet) * RTX_BUDGET)
             if len(self._rtx) > RTX_BUFFER_PACKETS:
                 self._rtx.popitem(last=False)
             link = session.udp_link
@@ -174,7 +178,11 @@ class Stream:
             if stored is None:
                 continue
             media_ms, payload = stored
+            # 손실이 심할 때 NACK가 쏟아지면 재전송이 원래 스트림보다 커져서 더 막힘. 폰 테스트에서 12Mbps까지 나갔음
+            if self._rtx_tokens < len(payload):
+                break
             packet = P.pack_data(self.id, seq, self._now_ms(), media_ms, P.FLAG_RTX, payload)
+            self._rtx_tokens -= len(packet)
             self.session.counters.rtx_sent += 1
             self.session.counters.sent_bytes += len(packet)
             link.send(packet)
