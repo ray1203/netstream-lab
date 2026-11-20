@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetStream Lab 대시보드</title>
+<style>
+  :root {
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --s1: #2a78d6; --s2: #eb6834;
+    --good: #0ca30c; --critical: #d03b3b; --accent: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --s1: #3987e5; --s2: #d95926; --accent: #3987e5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, "Malgun Gothic", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 14px; margin: 0 0 8px; font-weight: 600; }
+  .sub { color: var(--ink2); }
+  .card { background: var(--surface); border: 1px solid var(--grid); border-radius: 8px; padding: 12px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .tile .label { color: var(--ink2); font-size: 12px; }
+  .tile .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .note { color: var(--muted); font-size: 12px; min-height: 18px; }
+  .layout { display: grid; grid-template-columns: 1fr 320px; gap: 12px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: 180px; }
+  .legend { display: flex; gap: 12px; font-size: 12px; color: var(--ink2); margin-bottom: 4px; }
+  .legend i { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 4px; }
+  .tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--axis);
+         border-radius: 6px; padding: 4px 8px; font-size: 12px; white-space: nowrap; display: none; z-index: 2; }
+  .side { display: grid; gap: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  button, select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--axis);
+                   border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled, select:disabled { opacity: .5; cursor: default; }
+  label.slider { display: grid; grid-template-columns: 70px 1fr 76px; gap: 8px; align-items: center; margin-bottom: 4px; }
+  label.slider output { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink2); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  #log { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; font-size: 13px; }
+  #log li { padding: 3px 0; border-bottom: 1px solid var(--grid); }
+  #log time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .status { font-size: 12px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--axis); color: var(--ink2); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>NetStream Lab</h1>
+    <span class="sub" id="clientInfo">클라이언트를 기다리는 중</span>
+    <span class="status" id="conn">연결 중</span>
+  </header>
+
+  <section class="tiles">
+    <div class="card tile"><div class="label">전송 방식</div><div class="value" id="tMode">-</div><div class="note" id="tVideo"></div></div>
+    <div class="card tile"><div class="label">화질</div><div class="value" id="tQuality">-</div><div class="note" id="tQualityNote"></div></div>
+    <div class="card tile"><div class="label">수신 속도</div><div class="value" id="tRecv">-</div><div class="note" id="tSend"></div></div>
+    <div class="card tile"><div class="label">손실률</div><div class="value" id="tLoss">-</div><div class="note" id="tLossNote"></div></div>
+    <div class="card tile"><div class="label">클라이언트 버퍼</div><div class="value" id="tBuffer">-</div><div class="note" id="tBufferNote"></div></div>
+    <div class="card tile"><div class="label">RTT</div><div class="value" id="tRtt">-</div><div class="note" id="tJitter"></div></div>
+  </section>
+
+  <div class="layout">
+    <section class="charts" id="charts"></section>
+
+    <aside class="side">
+      <div class="card">
+        <h2>전송 제어</h2>
+        <div class="row">
+          <button id="bTcp" data-mode="tcp">TCP</button>
+          <button id="bUdp" data-mode="udp">UDP</button>
+          <button id="bNack">NACK 재전송</button>
+        </div>
+        <div class="row">
+          <span class="sub">화질</span>
+          <select id="quality"></select>
+        </div>
+        <p class="hint">자동(ABR)은 손실과 버퍼를 보고 서버가 화질을 바꿉니다.</p>
+      </div>
+
+      <div class="card">
+        <h2>네트워크 열화 시뮬레이터</h2>
+        <div class="row" id="presets"></div>
+        <label class="slider">손실 <input type="range" id="loss" min="0" max="30" step="1" value="0"><output id="lossOut"></output></label>
+        <label class="slider">지연 <input type="range" id="delay" min="0" max="500" step="10" value="0"><output id="delayOut"></output></label>
+        <label class="slider">지터 <input type="range" id="jitter" min="0" max="200" step="5" value="0"><output id="jitterOut"></output></label>
+        <label class="slider">대역폭 <input type="range" id="bw" min="0" max="6000" step="100" value="0"><output id="bwOut"></output></label>
+        <p class="hint" id="tcpModel"></p>
+        <p class="hint">UDP는 패킷을 실제로 버리거나 늦춥니다. TCP는 응용에서 세그먼트를 버릴 수 없어서, 손실의 결과(재전송 대기와 처리량 감소)를 모델로 적용합니다.</p>
+      </div>
+
+      <div class="card">
+        <h2>이벤트</h2>
+        <ul id="log"></ul>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script>
+const WINDOW = 120;  // 그래프에 보여 줄 초
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = (v, digits = 0) => v == null ? "-" : Number(v).toLocaleString("ko-KR", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+
+// 차트 정의: 한 차트에는 단위가 같은 계열만 넣는다 (축은 하나)
+const CHARTS = [
+  { title: "처리량 (kbps)", unit: "kbps", cap: 8000, series: [
+      { name: "서버 송신", color: "--s1", get: s => s.send_kbps },
+      { name: "클라이언트 수신", color: "--s2", get: s => s.recv_kbps } ] },
+  { title: "패킷 손실률 (%)", unit: "%", digits: 1, minMax: 5, series: [
+      { name: "손실 (재전송 전)", color: "--s1", get: s => s.raw_loss_pct },
+      { name: "최종 손실 (NACK 복구 후)", color: "--s2", get: s => s.loss_pct } ] },
+  { title: "클라이언트 버퍼 (초)", unit: "초", digits: 1, minMax: 4, series: [
+      { name: "버퍼", color: "--s1", get: s => s.buffer_ms == null ? null : s.buffer_ms / 1000 } ] },
+  { title: "RTT와 지터 (ms)", unit: "ms", digits: 1, minMax: 20, series: [
+      { name: "RTT", color: "--s1", get: s => s.rtt_ms },
+      { name: "지터", color: "--s2", get: s => s.jitter_ms } ] },
+];
+
+let history = [];
+let qualities = [];
+let latest = null;
+
+function buildCharts() {
+  const root = $("charts");
+  for (const chart of CHARTS) {
+    const card = document.createElement("div");
+    card.className = "card chart";
+    const legend = chart.series.length > 1
+      ? `<div class="legend">${chart.series.map(s => `<span><i style="background:var(${s.color})"></i>${s.name}</span>`).join("")}</div>` : "";
+    card.innerHTML = `<h2>${chart.title}</h2>${legend}<svg></svg><div class="tip"></div>`;
+    root.appendChild(card);
+    chart.svg = card.querySelector("svg");
+    chart.tip = card.querySelector(".tip");
+    chart.svg.addEventListener("mousemove", e => hover(chart, e));
+    chart.svg.addEventListener("mouseleave", () => { chart.hoverIndex = null; chart.tip.style.display = "none"; draw(chart); });
+  }
+}
+
+function niceMax(value) {
+  if (value <= 0) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(value)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * pow >= value) return m * pow;
+  return 10 * pow;
+}
+
+function geometry(chart) {
+  const box = chart.svg.getBoundingClientRect();
+  return { w: box.width || 400, h: box.height || 180, left: 44, right: 8, top: 8, bottom: 20 };
+}
+
+function draw(chart) {
+  const g = geometry(chart);
+  const data = history.slice(-WINDOW);
+  const now = data.length ? data[data.length - 1].t : Date.now() / 1000;
+  const plotW = g.w - g.left - g.right, plotH = g.h - g.top - g.bottom;
+  const x = t => g.left + plotW * (1 - (now - t) / WINDOW);
+  let max = chart.minMax || 0;
+  for (const p of data) for (const s of chart.series) {
+    const v = p.session ? s.get(p.session) : null;
+    if (v != null && v > max) max = v;
+  }
+  max = niceMax(chart.cap ? Math.min(max, chart.cap) : max);  // 시작할 때의 순간 폭주가 축을 눌러 버리지 않도록 상한을 둔다
+  const y = v => g.top + plotH * (1 - v / max);
+  let out = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = max * i / 4, yy = y(v);
+    out += `<line x1="${g.left}" x2="${g.w - g.right}" y1="${yy}" y2="${yy}" stroke="var(${i ? "--grid" : "--axis"})" stroke-width="1"/>`;
+    out += `<text x="${g.left - 6}" y="${yy + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${fmt(v, max < 10 ? 1 : 0)}</text>`;
+  }
+  for (const sec of [0, 30, 60, 90, 120]) {
+    const xx = g.left + plotW * (1 - sec / WINDOW);
+    out += `<text x="${xx}" y="${g.h - 5}" text-anchor="${sec === 0 ? "end" : sec === WINDOW ? "start" : "middle"}" font-size="11" fill="var(--muted)">${sec === 0 ? "지금" : "-" + sec + "초"}</text>`;
+  }
+  for (const s of chart.series) {
+    let path = "", pen = false;
+    for (const p of data) {
+      const v = p.session ? s.get(p.session) : null;
+      if (v == null) { pen = false; continue; }
+      path += `${pen ? "L" : "M"}${x(p.t).toFixed(1)},${y(Math.min(v, max)).toFixed(1)}`;
+      pen = true;
+    }
+    if (path) out += `<path d="${path}" fill="none" stroke="var(${s.color})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  if (chart.hoverIndex != null && data[chart.hoverIndex]) {
+    const p = data[chart.hoverIndex], xx = x(p.t);
+    out += `<line x1="${xx}" x2="${xx}" y1="${g.top}" y2="${g.top + plotH}" stroke="var(--axis)" stroke-width="1"/>`;
+    for (const s of chart.series) {
+      const v = p.session ? s.get(p.session) : null;
+      if (v != null) out += `<circle cx="${xx}" cy="${y(Math.min(v, max))}" r="4" fill="var(${s.color})" stroke="var(--surface)" stroke-width="2"/>`;
+    }
+  }
+  chart.svg.innerHTML = out;
+  chart.scale = { x, data };
+}
+
+function hover(chart, event) {
+  if (!chart.scale || !chart.scale.data.length) return;
+  const box = chart.svg.getBoundingClientRect();
+  const px = event.clientX - box.left;
+  let best = 0, bestDistance = Infinity;
+  chart.scale.data.forEach((p, i) => {
+    const d = Math.abs(chart.scale.x(p.t) - px);
+    if (d < bestDistance) { bestDistance = d; best = i; }
+  });
+  chart.hoverIndex = best;
+  draw(chart);
+  const p = chart.scale.data[best];
+  const time = new Date(p.t * 1000).toLocaleTimeString("ko-KR", { hour12: false });
+  const rows = chart.series.map(s => {
+    const v = p.session ? s.get(p.session) : null;
+    return `<div><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(${s.color});margin-right:6px"></i>${s.name} <b>${fmt(v, chart.digits || 0)}${v == null ? "" : " " + chart.unit}</b></div>`;
+  }).join("");
+  chart.tip.innerHTML = `<div style="color:var(--muted)">${time}</div>${rows}`;
+  chart.tip.style.display = "block";
+  const left = Math.min(px + 12, box.width - chart.tip.offsetWidth - 4);
+  chart.tip.style.left = Math.max(4, left) + "px";
+  chart.tip.style.top = (chart.svg.offsetTop + 8) + "px";
+}
+
+function renderTiles(sample) {
+  const s = sample.session;
+  const imp = sample.impair;
+  $("clientInfo").textContent = s ? `${s.client} (${s.address}) · 인코더 ${sample.encoder}` : `클라이언트를 기다리는 중 · 인코더 ${sample.encoder}`;
+  $("tMode").textContent = s && s.mode ? s.mode.toUpperCase() : "-";
+  $("tVideo").textContent = s && s.video ? `${s.video} · ${fmt(s.position)}초${s.playing ? "" : " (끝)"}` : "";
+  $("tQuality").textContent = s && s.quality ? s.quality : "-";
+  $("tQualityNote").textContent = s ? (s.quality_setting === "auto" ? "자동 (ABR)" : "고정") : "";
+  $("tRecv").textContent = s && s.recv_kbps != null ? fmt(s.recv_kbps) + " kbps" : "-";
+  $("tSend").textContent = s ? `서버 송신 ${fmt(s.send_kbps)} kbps` : "";
+  $("tLoss").textContent = s && s.loss_pct != null ? fmt(s.loss_pct, 1) + " %" : "-";
+  let lossNote = "";
+  if (s && s.mode === "tcp") lossNote = s.tcp_retx ? `TCP가 재전송으로 숨김 (모델 ${s.tcp_retx}회/초)` : "TCP는 손실을 응용에 보이지 않음";
+  else if (s && s.mode === "udp") lossNote = s.nack ? `재전송 전 ${fmt(s.raw_loss_pct, 1)} % · 복구 ${fmt(s.recovered)}개/초` : `뒤바뀜 ${fmt(s.reordered)}개/초`;
+  $("tLossNote").textContent = lossNote;
+  $("tBuffer").textContent = s && s.buffer_ms != null ? fmt(s.buffer_ms / 1000, 1) + " 초" : "-";
+  $("tBufferNote").textContent = s && s.stalled ? "■ 재생 멈춤 (버퍼링)" : "";
+  $("tBufferNote").style.color = s && s.stalled ? "var(--critical)" : "";
+  $("tRtt").textContent = s && s.rtt_ms != null ? fmt(s.rtt_ms, 1) + " ms" : "-";
+  $("tJitter").textContent = s && s.jitter_ms != null ? `지터 ${fmt(s.jitter_ms, 1)} ms` : "";
+
+  const active = !!s;
+  for (const b of [$("bTcp"), $("bUdp")]) { b.disabled = !active; b.classList.toggle("on", active && s.mode === b.dataset.mode); }
+  $("bNack").disabled = !active; $("bNack").classList.toggle("on", active && s.nack);
+  $("quality").disabled = !active;
+  if (active && document.activeElement !== $("quality")) $("quality").value = s.quality_setting;
+
+  if (!dragging) {
+    $("loss").value = Math.round(imp.loss * 100); $("delay").value = imp.delay_ms;
+    $("jitter").value = imp.jitter_ms; $("bw").value = imp.bandwidth_kbps;
+    showSliders();
+  }
+  $("tcpModel").textContent = sample.tcp_model_kbps ? `TCP 모델 처리량 상한: 약 ${fmt(sample.tcp_model_kbps)} kbps` : "TCP 모델 처리량 상한: 없음";
+}
+
+function showSliders() {
+  $("lossOut").textContent = $("loss").value + " %";
+  $("delayOut").textContent = $("delay").value + " ms";
+  $("jitterOut").textContent = $("jitter").value + " ms";
+  $("bwOut").textContent = +$("bw").value ? fmt($("bw").value) + " kbps" : "제한 없음";
+}
+
+function addEvents(events) {
+  const log = $("log");
+  for (const e of events) {
+    const li = document.createElement("li");
+    const time = new Date(e.t * 1000).toLocaleTimeString("ko-KR", { hour12: false });
+    li.innerHTML = `<time>${time}</time>`;
+    li.appendChild(document.createTextNode(e.text));
+    log.prepend(li);
+  }
+  while (log.children.length > 60) log.lastChild.remove();
+}
+
+async function post(name, body) {
+  try {
+    const response = await fetch("/api/" + name, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) addEvents([{ t: Date.now() / 1000, text: "요청 실패: " + ((await response.json()).error || response.status) }]);
+  } catch (error) {
+    addEvents([{ t: Date.now() / 1000, text: "서버에 연결할 수 없습니다" }]);
+  }
+}
+
+let dragging = false;
+function sendImpair() {
+  post("impair", { loss: $("loss").value / 100, delay_ms: +$("delay").value, jitter_ms: +$("jitter").value, bandwidth_kbps: +$("bw").value });
+}
+for (const id of ["loss", "delay", "jitter", "bw"]) {
+  $(id).addEventListener("input", () => { dragging = true; showSliders(); });
+  $(id).addEventListener("change", () => { sendImpair(); setTimeout(() => dragging = false, 1500); });
+}
+const PRESETS = [
+  ["정상", 0, 0, 0, 0], ["손실 5%", 5, 0, 0, 0], ["손실 5% + 지연 100ms", 5, 100, 0, 0],
+  ["지터 50ms", 0, 20, 50, 0], ["대역폭 1Mbps", 0, 0, 0, 1000],
+];
+for (const [name, loss, delay, jitter, bw] of PRESETS) {
+  const button = document.createElement("button");
+  button.textContent = name;
+  button.onclick = () => { $("loss").value = loss; $("delay").value = delay; $("jitter").value = jitter; $("bw").value = bw; showSliders(); sendImpair(); };
+  $("presets").appendChild(button);
+}
+$("bTcp").onclick = () => post("mode", { mode: "tcp" });
+$("bUdp").onclick = () => post("mode", { mode: "udp" });
+$("bNack").onclick = () => post("options", { nack: !(latest && latest.session && latest.session.nack) });
+$("quality").onchange = () => { post("options", { quality: $("quality").value }); $("quality").blur(); };
+
+function redraw() { for (const chart of CHARTS) draw(chart); }
+
+function connect() {
+  const source = new EventSource("/events");
+  source.addEventListener("hello", e => {
+    const hello = JSON.parse(e.data);
+    history = hello.history;
+    qualities = hello.qualities;
+    $("quality").innerHTML = `<option value="auto">자동 (ABR)</option>` + qualities.map(q => `<option value="${q.name}">${q.name} · 약 ${fmt(q.kbps)} kbps</option>`).join("");
+    $("log").innerHTML = "";
+    addEvents(hello.events);
+    if (history.length) { latest = history[history.length - 1]; renderTiles(latest); }
+    $("conn").textContent = "서버 연결됨";
+    redraw();
+  });
+  source.addEventListener("sample", e => {
+    const { sample, events } = JSON.parse(e.data);
+    latest = sample;
+    history.push(sample);
+    if (history.length > 300) history.shift();
+    renderTiles(sample);
+    addEvents(events);
+    redraw();
+  });
+  source.onerror = () => { $("conn").textContent = "서버 연결 끊김, 다시 시도 중"; };
+}
+
+buildCharts();
+showSliders();
+redraw();
+window.addEventListener("resize", redraw);
+connect();
+</script>
+</body>
+</html>
