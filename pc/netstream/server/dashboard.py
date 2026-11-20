@@ -1,9 +1,8 @@
-"""대시보드: 통계를 1초마다 모아 브라우저로 보낸다.
+"""대시보드. 라이브러리 없이 asyncio로 만든 간단한 HTTP 서버
 
-외부 라이브러리 없이 asyncio 소켓 위에 작은 HTTP 서버를 직접 만들었다.
-- GET  /            대시보드 페이지
-- GET  /events      Server-Sent Events. 연결을 열어 두고 1초마다 통계 한 줄(JSON)을 보낸다.
-- POST /api/...     열화 설정, NACK, 화질, 전송 모드 변경
+GET /         페이지
+GET /events   SSE, 1초마다 통계 JSON
+POST /api/..  열화 설정, NACK, 화질, 모드
 """
 
 from __future__ import annotations
@@ -48,14 +47,13 @@ class Dashboard:
         if self._server:
             self._server.close()
 
-    # ----- 통계 수집 -----
 
     async def _sample_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0)
             try:
                 sample = self.sample()
-            except Exception:  # 통계 오류로 서버가 죽으면 안 된다
+            except Exception:
                 log.exception("통계 수집 실패")
                 continue
             self.history.append(sample)
@@ -106,14 +104,14 @@ class Dashboard:
             "video": stream.video.name if stream else None,
             "position": round(stream.position(), 1) if stream else None,
             "duration": stream.video.duration if stream else None,
-            # 서버가 센 값 (최근 1초)
+            # 서버 쪽 (최근 1초)
             "send_kbps": round(delta("sent_bytes") * 8 / 1000),
             "sent_packets": delta("sent_packets"),
             "dropped_random": delta("dropped_random"),
             "dropped_congestion": delta("dropped_congestion"),
             "rtx_sent": delta("rtx_sent"),
             "tcp_retx": delta("tcp_retx"),
-            # 클라이언트가 보고한 값 (최근 1초)
+            # 클라이언트 REPORT
             "recv_kbps": report.get("kbps"),
             "raw_loss_pct": _percent(report.get("raw_loss_rate")),
             "loss_pct": _percent(report.get("loss_rate")),
@@ -127,7 +125,6 @@ class Dashboard:
         }
         return sample
 
-    # ----- HTTP -----
 
     async def _on_http(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -151,7 +148,7 @@ class Dashboard:
             elif method == "GET" and path == "/events":
                 await self._serve_events(writer)
             elif method == "POST" and path.startswith("/api/"):
-                # JSON이 아닌 요청은 받지 않는다: 다른 웹 페이지가 몰래 보내는 요청(CSRF)을 막는다
+                # json만 받음 (다른 사이트에서 몰래 POST 못 하게)
                 if not headers.get("content-type", "").startswith("application/json"):
                     self._respond_json(writer, 415, {"error": "application/json만 받습니다"})
                 else:
@@ -230,7 +227,7 @@ class Dashboard:
             mode = values.get("mode")
             if mode not in ("tcp", "udp"):
                 return 400, {"error": "mode는 tcp 또는 udp"}
-            # 전송 모드는 클라이언트가 바꾼다 (데이터 채널을 여는 쪽이 클라이언트이므로). 서버는 부탁만 한다.
+            # 모드는 클라이언트가 PLAY를 다시 보내야 바뀜
             session.send({"type": "SWITCH_MODE", "mode": mode})
             return 200, {"mode": mode}
         return 404, {"error": "없는 API입니다"}

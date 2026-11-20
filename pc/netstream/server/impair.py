@@ -1,20 +1,12 @@
-"""네트워크 열화 시뮬레이터.
+"""네트워크 열화 시뮬레이터 (손실, 지연, 지터, 대역폭 제한)
 
-실제 Wi-Fi는 시연 때 원하는 만큼 나빠져 주지 않으므로, 서버가 내보내는 길목에서
-손실, 지연, 지터, 대역폭 제한을 일부러 만든다.
+UDP는 패킷을 진짜로 버리거나 늦게 보냄.
 
-UDP 모드는 패킷을 실제로 버리거나 늦게 보낸다. 있는 그대로다.
-
-TCP 모드는 사정이 다르다. 응용 프로그램은 TCP 세그먼트를 직접 버릴 수 없고,
-버린다 해도 커널이 재전송해서 응용에는 손실이 보이지 않는다. 그래서 손실이
-TCP에 미치는 "결과"를 모델로 흉내 낸다 (UdpLink와 TcpLink의 차이).
-
-1. Head-of-line blocking: 세그먼트 하나를 잃으면 재전송이 도착할 때까지(약 1 RTT)
-   그 뒤의 데이터도 응용에 전달되지 않는다.
-2. 혼잡 제어: 손실을 혼잡 신호로 보고 창을 줄이므로 처리량이 떨어진다.
-   Mathis 공식  처리량 = 1.22 x MSS / (RTT x sqrt(p))  으로 상한을 둔다.
-
-모델이지 실제 손실이 아니라는 점은 대시보드와 보고서에 밝혀 둔다.
+TCP는 앱에서 세그먼트를 버릴 방법이 없고 버려도 커널이 재전송해버림.
+그래서 손실이 났을 때 생기는 결과만 흉내냄:
+  - 재전송 올 때까지 뒤 데이터가 막힘 (HOL blocking, 1 RTT)
+  - 처리량 감소: Mathis 공식 1.22 * MSS / (RTT * sqrt(p))
+실제 손실은 아님. 보고서에 적어둘 것
 """
 
 from __future__ import annotations
@@ -24,18 +16,18 @@ import math
 import random
 from dataclasses import asdict, dataclass
 
-MSS = 1460            # 이더넷에서 TCP 세그먼트 하나의 최대 payload
-BASE_RTT = 0.010      # 지연을 넣지 않았을 때 가정하는 LAN 왕복 시간
-UDP_QUEUE_LIMIT = 0.2  # 대역폭 제한 시 병목 큐 길이(초). 넘치면 버린다 (tail drop)
-TCP_BACKLOG_LIMIT = 0.3  # TCP 송신 대기열이 이만큼 밀리면 ffmpeg 읽기를 멈춘다 (backpressure)
+MSS = 1460
+BASE_RTT = 0.010      # 지연 0일 때 LAN RTT 가정값
+UDP_QUEUE_LIMIT = 0.2  # 대역폭 제한 큐 길이(초), 넘치면 drop
+TCP_BACKLOG_LIMIT = 0.3  # 이만큼 밀리면 ffmpeg 읽기를 멈춤
 
 
 @dataclass
 class Impairment:
     loss: float = 0.0            # 0~1
-    delay_ms: float = 0.0        # 서버 -> 클라이언트 편도 지연
-    jitter_ms: float = 0.0       # 패킷마다 0~jitter_ms 사이의 추가 지연
-    bandwidth_kbps: float = 0.0  # 0이면 제한 없음
+    delay_ms: float = 0.0        # 편도
+    jitter_ms: float = 0.0       # 0~jitter_ms 랜덤 추가 지연
+    bandwidth_kbps: float = 0.0  # 0 = 제한 없음
 
     def update(self, values: dict) -> None:
         def number(key: str, low: float, high: float, current: float) -> float:
@@ -56,7 +48,7 @@ class Impairment:
         return BASE_RTT + self.delay_ms / 1000.0
 
     def tcp_rate_limit(self) -> float | None:
-        """TCP 모드의 처리량 상한(바이트/초). 제한이 없으면 None."""
+        # bytes/s, 제한 없으면 None
         limits = []
         if self.bandwidth_kbps > 0:
             limits.append(self.bandwidth_kbps * 1000 / 8)
@@ -67,18 +59,17 @@ class Impairment:
 
 @dataclass
 class Counters:
-    """서버가 센 누적 값. 대시보드가 1초마다 차이를 구해 초당 값으로 바꾼다."""
+    # 누적값. 대시보드가 1초마다 차이를 구함
     sent_packets: int = 0
     sent_bytes: int = 0
-    dropped_random: int = 0      # 시뮬레이터가 무작위로 버린 패킷
-    dropped_congestion: int = 0  # 대역폭 제한 큐가 넘쳐 버린 패킷
-    rtx_sent: int = 0            # NACK를 받아 다시 보낸 패킷
+    dropped_random: int = 0
+    dropped_congestion: int = 0  # 대역폭 제한으로 버린 것
+    rtx_sent: int = 0
     nack_messages: int = 0
-    tcp_retx: int = 0            # TCP 모델에서 재전송이 일어난 것으로 친 횟수
+    tcp_retx: int = 0            # TCP 모델에서 재전송으로 친 횟수
 
 
 class UdpLink:
-    """클라이언트 한 명에게 가는 UDP 길. 열화를 실제 패킷에 적용한다."""
 
     def __init__(self, transport: asyncio.DatagramTransport, addr, impairment: Impairment, counters: Counters):
         self.transport = transport
@@ -116,7 +107,6 @@ class UdpLink:
 
 
 class TcpLink:
-    """클라이언트 한 명에게 가는 TCP 데이터 연결. 손실의 영향을 모델로 적용한다."""
 
     def __init__(self, writer: asyncio.StreamWriter, impairment: Impairment, counters: Counters):
         self.writer = writer
@@ -136,9 +126,9 @@ class TcpLink:
         if imp.jitter_ms > 0:
             release += random.uniform(0.0, imp.jitter_ms / 1000.0)
         if imp.loss > 0 and random.random() < imp.loss:
-            release += imp.model_rtt()  # 재전송이 도착할 때까지 기다린다
+            release += imp.model_rtt()  # 재전송 기다리는 시간
             self.counters.tcp_retx += 1
-        # TCP는 순서를 지키므로 앞 패킷보다 먼저 전달될 수 없다 (head-of-line blocking)
+        # 앞 패킷보다 먼저 못 나감 (HOL blocking)
         release = max(release, self._last_release)
         rate = imp.tcp_rate_limit()
         if rate:
@@ -151,7 +141,6 @@ class TcpLink:
             await asyncio.sleep(backlog)
 
     def flush(self) -> None:
-        """아직 보내지 않은 패킷을 버린다 (탐색이나 모드 전환 때)."""
         while not self._queue.empty():
             self._queue.get_nowait()
         self._last_release = 0.0
@@ -165,7 +154,7 @@ class TcpLink:
                 if wait > 0.002:
                     await asyncio.sleep(wait)
                 self.writer.write(packet)
-                await self.writer.drain()  # 실제 TCP 송신 버퍼가 차면 여기서 멈춘다
+                await self.writer.drain()
         except (ConnectionError, OSError):
             pass
 

@@ -1,32 +1,11 @@
-"""NetStream Lab 프로토콜 정의. 서버와 PC 클라이언트가 함께 쓴다.
+"""프로토콜 정의. 서버랑 PC 클라이언트가 같이 씀 (자세한 건 PROTOCOL.md)
 
-채널은 세 가지다.
-
-1. 제어 채널 (TCP 9000)
-   프레임 = 길이(4바이트, big-endian) + UTF-8 JSON.
-   TCP는 바이트 스트림이라 메시지 경계가 없으므로 길이를 앞에 붙여 경계를 만든다.
-
-2. 데이터 채널, TCP 모드 (TCP 9001)
-   첫 프레임만 제어 채널과 같은 형식의 ATTACH 메시지이고,
-   그 뒤로는 아래의 데이터 패킷(헤더 17바이트 + payload)이 이어진다.
-
-3. 데이터 채널, UDP 모드 (UDP 9002)
-   데이터그램 하나 = 데이터 패킷 하나.
-
-데이터 패킷 헤더 (17바이트, big-endian):
-
+제어 채널(TCP 9000): 길이 4바이트 + JSON
+데이터 패킷(TCP 9001 / UDP 9002) 헤더 17바이트:
     stream_id(2) | seq(4) | send_ms(4) | media_ms(4) | flags(1) | payload_len(2)
 
-- stream_id : 탐색, 모드 전환, 화질 변경 때마다 바뀐다. 이전 스트림의 늦은 패킷을 버리는 데 쓴다.
-- seq       : 스트림마다 0부터 1씩 증가. 손실과 순서 뒤바뀜을 감지한다.
-- send_ms   : 서버가 보낸 시각. 지터 계산에 쓴다.
-- media_ms  : 이 패킷의 영상 시각 (MPEG-TS PCR 기준). 버퍼 잔량 계산에 쓴다.
-- flags     : RTX(재전송), EOS(스트림 끝).
-
-payload는 최대 1316바이트 = MPEG-TS 패킷 188바이트 x 7개.
-1316 + 헤더 17 + UDP 8 + IP 20 = 1361바이트로 이더넷 MTU 1500보다 작아서
-IP 단편화가 생기지 않는다. 또 항상 TS 패킷 경계에서 자르므로,
-UDP 패킷 하나를 잃어도 나머지 스트림의 188바이트 정렬은 깨지지 않는다.
+payload는 TS 패킷 188 * 7 = 1316바이트까지.
+헤더랑 UDP/IP 헤더 합쳐도 1361이라 MTU(1500) 안 넘음
 """
 
 from __future__ import annotations
@@ -52,7 +31,7 @@ DATA_HEADER_SIZE = DATA_HEADER.size  # 17
 FLAG_RTX = 0x01
 FLAG_EOS = 0x02
 
-# UDP 모드에서 클라이언트가 서버에 자기 주소를 알리는 데이터그램: 매직 4바이트 + 토큰(ASCII)
+# UDP 주소 등록용 데이터그램 = 매직 + 토큰
 UDP_ATTACH_MAGIC = b"NSL1"
 
 MAX_FRAME_SIZE = 1 << 20
@@ -71,7 +50,6 @@ def pack_data(stream_id: int, seq: int, send_ms: int, media_ms: int, flags: int,
 
 
 def unpack_data(packet: bytes) -> tuple[int, int, int, int, int, bytes]:
-    """(stream_id, seq, send_ms, media_ms, flags, payload)를 돌려준다."""
     if len(packet) < DATA_HEADER_SIZE:
         raise ValueError("데이터 패킷이 헤더보다 짧다")
     stream_id, seq, send_ms, media_ms, flags, length = DATA_HEADER.unpack_from(packet)
@@ -87,7 +65,7 @@ def encode_frame(message: dict) -> bytes:
 
 
 async def read_frame(reader: asyncio.StreamReader) -> dict | None:
-    """프레임 하나를 읽는다. 상대가 연결을 닫았으면 None."""
+    # 연결 끊기면 None
     try:
         head = await reader.readexactly(_LENGTH.size)
     except asyncio.IncompleteReadError:
@@ -106,7 +84,6 @@ async def read_frame(reader: asyncio.StreamReader) -> dict | None:
 
 
 async def read_data_packet(reader: asyncio.StreamReader) -> tuple[int, int, int, int, int, bytes] | None:
-    """TCP 데이터 채널에서 데이터 패킷 하나를 읽는다. 연결이 닫혔으면 None."""
     try:
         head = await reader.readexactly(DATA_HEADER_SIZE)
         stream_id, seq, send_ms, media_ms, flags, length = DATA_HEADER.unpack(head)
@@ -117,15 +94,11 @@ async def read_data_packet(reader: asyncio.StreamReader) -> tuple[int, int, int,
 
 
 def last_pcr_ms(chunk: bytes) -> float | None:
-    """TS 청크 안에서 마지막 PCR(Program Clock Reference)을 밀리초로 돌려준다.
-
-    PCR은 TS 패킷의 adaptation field에 들어 있는 90kHz 기준 시계 값이다.
-    서버는 이 값으로 "지금 보내는 데이터가 영상의 몇 초 지점인지"를 알아내
-    전송 속도를 조절하고, 클라이언트는 버퍼에 몇 초 분량이 남았는지 계산한다.
-    """
+    # 청크 안의 마지막 PCR(ms). PCR은 adaptation field에 있는 90kHz 시계값
+    # 전송 속도 맞추는 거랑 버퍼 계산에 씀
     pcr = None
     for off in range(0, len(chunk) - TS_PACKET_SIZE + 1, TS_PACKET_SIZE):
-        if chunk[off] != 0x47:  # 동기 바이트
+        if chunk[off] != 0x47:  # sync byte
             continue
         has_adaptation = chunk[off + 3] & 0x20
         if has_adaptation and chunk[off + 4] >= 7 and chunk[off + 5] & 0x10:

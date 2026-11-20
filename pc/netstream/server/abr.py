@@ -1,19 +1,15 @@
-"""자동 화질 조절 (ABR, Adaptive Bitrate).
+"""ABR (자동 화질 조절)
 
-클라이언트가 1초마다 보내는 보고(손실률, 버퍼 잔량, 수신 속도)를 보고
-화질 사다리를 오르내린다.
-
-- 내리기: 2번 연속으로 나쁘면 (복구 후 손실 3% 초과 또는 재생 멈춤)
-          수신 속도의 70%에 들어가는 가장 높은 화질로 내린다. 최소 한 칸.
-- 올리기: 연속으로 좋으면 한 칸 올린다. 올렸다가 15초 안에 다시 내려오면
-          다음에는 두 배 더 오래 기다린다 (같은 실패를 반복하지 않도록).
+클라이언트가 1초마다 보내는 REPORT 기준.
+- 2번 연속 나쁨(손실 3% 초과 or 버퍼 바닥) -> 수신 속도의 70%에 맞는 화질로 내림
+- 10번 연속 좋음 -> 한 칸 올림. 올리고 15초 안에 다시 내려오면 다음엔 2배 더 기다림
 """
 
 from __future__ import annotations
 
 from .transcoder import LADDER
 
-SETTLE_SECONDS = 4.0     # 화질을 바꾼 직후의 보고는 믿지 않는다
+SETTLE_SECONDS = 4.0     # 화질 바꾼 직후 보고는 무시
 BAD_REPORTS = 2
 GOOD_REPORTS = 10
 MAX_GOOD_REPORTS = 100
@@ -33,7 +29,7 @@ class Abr:
         self._last_up = float("-inf")
 
     def on_report(self, report: dict, now: float) -> tuple[int, str] | None:
-        """새 화질 단계와 이유를 돌려준다. 바꿀 필요가 없으면 None."""
+        # 바꿀 거면 (level, 이유), 아니면 None
         if now - self._last_switch < SETTLE_SECONDS:
             return None
         loss = float(report.get("loss_rate") or 0.0)

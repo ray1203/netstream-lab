@@ -1,4 +1,4 @@
-"""ffmpeg로 영상을 실시간 트랜스코딩해 MPEG-TS를 표준 출력으로 내보낸다."""
+"""ffmpeg 실행 (H.264 + AAC, MPEG-TS를 stdout으로)"""
 
 from __future__ import annotations
 
@@ -13,8 +13,7 @@ from .library import Video
 
 log = logging.getLogger("netstream.transcoder")
 
-# MPEG-TS는 188바이트 패킷마다 4바이트 헤더가 붙고 PAT/PMT/PCR도 주기적으로 들어가므로
-# 실제 전송률은 영상+음성 비트레이트보다 10% 정도 크다.
+# TS 헤더, PAT/PMT 때문에 실제 전송률은 10%쯤 더 나옴
 TS_OVERHEAD = 1.10
 
 
@@ -34,7 +33,7 @@ class Quality:
         return {"name": self.name, "height": self.height, "fps": self.fps, "kbps": round(self.total_kbps)}
 
 
-# 낮은 화질에서 높은 화질 순서. ABR은 이 사다리를 한 칸씩 오르내린다.
+# 낮은 화질 -> 높은 화질 순서
 LADDER: list[Quality] = [
     Quality("144p", 144, 15, 150, 48),
     Quality("240p", 240, 24, 300, 64),
@@ -53,7 +52,7 @@ def quality_index(name: str) -> int | None:
 
 
 def find_tool(name: str) -> str | None:
-    """ffmpeg/ffprobe 실행 파일을 찾는다. 환경 변수, PATH, winget 설치 경로 순서."""
+    # 환경변수 -> PATH -> winget 설치 경로 순으로 찾음
     override = os.environ.get(f"NETSTREAM_{name.upper()}")
     if override and Path(override).is_file():
         return override
@@ -78,7 +77,7 @@ class Transcoder:
         self.encoder = encoder
 
     async def detect_encoder(self) -> str:
-        """NVENC(NVIDIA 하드웨어 인코더)를 쓸 수 있으면 쓰고, 아니면 libx264(CPU)."""
+        # nvenc 되는지 짧게 돌려보고 안 되면 libx264
         if self.encoder != "auto":
             return self.encoder
         self.encoder = "libx264"
@@ -98,7 +97,7 @@ class Transcoder:
     def command(self, video: Video, quality: Quality, position: float) -> list[str]:
         source_fps = video.fps or 30.0
         fps = max(1, min(quality.fps, round(source_fps)))
-        gop = fps  # 키프레임을 1초마다: UDP에서 패킷을 잃어도 1초 안에 화면이 복구된다
+        gop = fps  # 키프레임 1초마다 (UDP 손실 나도 1초 안에 복구)
         vf = f"scale=-2:'min(ih,{quality.height})',fps={fps},format=yuv420p"
         v = quality.video_kbps
         if self.encoder == "h264_nvenc":
@@ -119,11 +118,11 @@ class Transcoder:
             "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
             "-vf", vf, *video_args,
             "-c:a", "aac", "-b:a", f"{quality.audio_kbps}k", "-ac", "2", "-ar", "48000",
-            # 출력 타임스탬프를 영상 위치에 맞춘다: 화질이 바뀌어 ffmpeg를 다시 띄워도 시간이 이어진다
+            # 화질 바꿔서 다시 띄워도 타임스탬프가 이어지게
             "-output_ts_offset", f"{max(0.0, position):.3f}",
-            # 기본값은 32KB씩 모아서 내보낸다. 패킷마다 바로 내보내야 전송이 고르게 된다.
+            # 이거 없으면 32KB씩 모아서 나옴
             "-flush_packets", "1",
-            # PCR을 20ms마다 넣는다 (기본은 약 100ms). 서버가 PCR을 보고 전송 속도를 맞추므로 촘촘할수록 고르게 나간다.
+            # 기본은 PCR이 100ms 간격이라 전송이 뭉침
             "-pcr_period", "20",
             "-f", "mpegts", "pipe:1",
         ]

@@ -10,10 +10,7 @@ import java.io.InterruptedIOException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-/**
- * 네트워크 수신 스레드와 플레이어 사이의 통로.
- * 수신 쪽이 MPEG-TS 조각을 넣고(write), 플레이어가 꺼내 간다(take).
- */
+// 수신 스레드 -> 플레이어로 TS를 넘기는 큐
 class TsPipe {
     private val queue = LinkedBlockingQueue<ByteArray>()
 
@@ -25,19 +22,19 @@ class TsPipe {
         if (!closed && data.isNotEmpty()) queue.put(data)
     }
 
-    /** 스트림이 끝났다. 남은 데이터를 다 읽고 나면 끝을 알린다. */
+    // 정상 종료: 남은 데이터 다 읽은 뒤에 끝
     fun finish() {
         queue.put(END)
     }
 
-    /** 즉시 닫는다 (탐색, 모드 전환, 화질 변경으로 이 스트림을 버릴 때). */
+    // 바로 닫기 (탐색, 모드 전환 등)
     fun close() {
         closed = true
         queue.clear()
         queue.offer(END)
     }
 
-    /** 다음 조각. 끝났으면 null. 데이터가 올 때까지 기다린다. */
+    // 끝이면 null
     @Throws(InterruptedException::class)
     fun take(): ByteArray? {
         while (true) {
@@ -56,12 +53,9 @@ class TsPipe {
     }
 }
 
-/**
- * ExoPlayer가 데이터를 읽어 가는 입구. 보통은 HTTP나 파일이지만,
- * 여기서는 우리가 직접 만든 TCP/UDP 수신 결과(TsPipe)를 그대로 넘긴다.
- */
+// ExoPlayer용 DataSource. HTTP 대신 우리 소켓에서 받은 데이터(TsPipe)를 읽게 함
 @OptIn(UnstableApi::class)
-class PipeDataSource(private val pipe: TsPipe) : BaseDataSource(/* isNetwork = */ true) {
+class PipeDataSource(private val pipe: TsPipe) : BaseDataSource(true) {
     private var uri: Uri? = null
     private var current: ByteArray? = null
     private var offset = 0
@@ -72,7 +66,7 @@ class PipeDataSource(private val pipe: TsPipe) : BaseDataSource(/* isNetwork = *
         transferInitializing(dataSpec)
         opened = true
         transferStarted(dataSpec)
-        return C.LENGTH_UNSET.toLong()  // 길이를 모르는 스트림
+        return C.LENGTH_UNSET.toLong()
     }
 
     override fun read(buffer: ByteArray, bufferOffset: Int, length: Int): Int {
@@ -82,7 +76,7 @@ class PipeDataSource(private val pipe: TsPipe) : BaseDataSource(/* isNetwork = *
             chunk = try {
                 pipe.take()
             } catch (e: InterruptedException) {
-                // 플레이어가 읽기를 취소했다 (정지, 해제)
+                // 플레이어가 로딩 취소함
                 throw InterruptedIOException()
             } ?: return C.RESULT_END_OF_INPUT
             current = chunk

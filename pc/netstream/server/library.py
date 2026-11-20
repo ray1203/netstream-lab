@@ -1,4 +1,4 @@
-"""영상 폴더를 훑어 목록을 만들고, ffprobe로 길이와 해상도를 알아낸다."""
+"""영상 폴더 스캔 + ffprobe로 길이/해상도 읽기"""
 
 from __future__ import annotations
 

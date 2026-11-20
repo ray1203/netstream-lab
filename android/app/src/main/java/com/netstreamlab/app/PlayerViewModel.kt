@@ -49,11 +49,7 @@ data class UiState(
     val report: Report = Report(),
 )
 
-/**
- * 화면 상태와 플레이어를 관리한다.
- * - 네트워크 호출은 io 스레드 하나에서 차례로 실행한다 (요청 순서가 뒤섞이지 않는다).
- * - ExoPlayer는 메인 스레드에서만 만진다.
- */
+// 네트워크 호출은 io 스레드 하나에서 순서대로, ExoPlayer는 메인 스레드에서만
 @OptIn(UnstableApi::class)
 class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Listener {
 
@@ -65,7 +61,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
     private val main = Handler(Looper.getMainLooper())
     private var client: StreamClient? = null
 
-    // 서버가 3초쯤 앞서 보내 주므로 버퍼는 작게 잡는다. 0.5초만 쌓이면 재생을 시작한다.
+    // 서버가 3초 앞서 보내주니까 버퍼는 작게. 0.5초 쌓이면 재생 시작
     val player: ExoPlayer = ExoPlayer.Builder(app)
         .setLoadControl(
             DefaultLoadControl.Builder()
@@ -75,8 +71,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
         .build()
 
     private var pipe: TsPipe? = null
-    private var basePosition = 0.0        // 이 스트림이 시작한 영상 위치(초)
-    private var playerOrigin: Long? = null // 재생이 처음 시작됐을 때의 플레이어 시각(ms)
+    private var basePosition = 0.0        // 스트림 시작 위치(초)
+    private var playerOrigin: Long? = null // 첫 READY 때 player 위치(ms)
     private var started = false
     private var lastErrorRestart = 0L
 
@@ -97,7 +93,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                // UDP에서 깨진 데이터 때문에 디코더가 멈출 수 있다. 보던 위치에서 다시 요청한다.
+                // UDP 손실로 디코더가 죽는 경우가 있어서 보던 위치부터 다시 요청
                 val video = _state.value.current ?: return
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastErrorRestart < 3_000) {
@@ -111,7 +107,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
         main.post(ticker)
     }
 
-    /** 지금 보고 있는 영상 위치(초). */
     private fun position(): Double {
         val origin = playerOrigin ?: return basePosition
         return basePosition + (player.currentPosition - origin).coerceAtLeast(0) / 1000.0
@@ -129,7 +124,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
         }
     }
 
-    // ----- 화면에서 부르는 동작 -----
 
     fun setHost(host: String) = _state.update { it.copy(host = host, error = null) }
 
@@ -178,7 +172,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
         val state = _state.value
         if (mode == state.mode || (mode != "tcp" && mode != "udp")) return
         _state.update { it.copy(mode = mode) }
-        // 보던 위치에서 다른 전송 방식으로 다시 요청한다
         state.current?.let { requestPlay(it.id, mode, position()) }
     }
 
@@ -256,7 +249,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
         }
     }
 
-    /** 새 스트림을 플레이어에 연결한다. 데이터는 HTTP가 아니라 우리 소켓에서 온다 (PipeDataSource). */
     private fun attach(newPipe: TsPipe, position: Double) {
         pipe = newPipe
         basePosition = position
@@ -269,14 +261,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app), StreamClient.Li
         player.playWhenReady = true
     }
 
-    // ----- StreamClient.Listener (네트워크 스레드에서 불린다) -----
+    // StreamClient.Listener - 네트워크 스레드에서 호출됨
 
     override fun onOptions(nack: Boolean, qualitySetting: String, currentQuality: String?) {
         _state.update { it.copy(nack = nack, qualitySetting = qualitySetting, quality = currentQuality ?: it.quality) }
     }
 
     override fun onSwitchModeRequested(mode: String) {
-        main.post { setMode(mode) }  // 대시보드에서 전송 방식을 바꿨다
+        main.post { setMode(mode) }  // 대시보드에서 바꾼 경우
     }
 
     override fun onStreamChanged(pipe: TsPipe, quality: String, position: Double) {

@@ -30,7 +30,7 @@ android {
         compose = true
     }
     composeOptions {
-        // Kotlin 1.9.24와 짝이 맞는 Compose 컴파일러
+        // kotlin 1.9.24용
         kotlinCompilerExtensionVersion = "1.5.14"
     }
 }

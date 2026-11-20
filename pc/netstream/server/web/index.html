@@ -96,7 +96,7 @@
         <label class="slider">지터 <input type="range" id="jitter" min="0" max="200" step="5" value="0"><output id="jitterOut"></output></label>
         <label class="slider">대역폭 <input type="range" id="bw" min="0" max="6000" step="100" value="0"><output id="bwOut"></output></label>
         <p class="hint" id="tcpModel"></p>
-        <p class="hint">UDP는 패킷을 실제로 버리거나 늦춥니다. TCP는 응용에서 세그먼트를 버릴 수 없어서, 손실의 결과(재전송 대기와 처리량 감소)를 모델로 적용합니다.</p>
+        <p class="hint">UDP는 패킷을 실제로 버리고, TCP는 손실 시 생기는 지연과 처리량 감소를 모델로 흉내냅니다.</p>
       </div>
 
       <div class="card">
@@ -108,12 +108,12 @@
 </main>
 
 <script>
-const WINDOW = 120;  // 그래프에 보여 줄 초
+const WINDOW = 120;  // 그래프 구간(초)
 const $ = id => document.getElementById(id);
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const fmt = (v, digits = 0) => v == null ? "-" : Number(v).toLocaleString("ko-KR", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 
-// 차트 정의: 한 차트에는 단위가 같은 계열만 넣는다 (축은 하나)
+// 차트 목록. 단위 같은 것끼리만 묶음
 const CHARTS = [
   { title: "처리량 (kbps)", unit: "kbps", cap: 8000, series: [
       { name: "서버 송신", color: "--s1", get: s => s.send_kbps },
@@ -171,7 +171,7 @@ function draw(chart) {
     const v = p.session ? s.get(p.session) : null;
     if (v != null && v > max) max = v;
   }
-  max = niceMax(chart.cap ? Math.min(max, chart.cap) : max);  // 시작할 때의 순간 폭주가 축을 눌러 버리지 않도록 상한을 둔다
+  max = niceMax(chart.cap ? Math.min(max, chart.cap) : max);  // 처음에 몰아서 보낼 때 값이 튀어서 상한 둠
   const y = v => g.top + plotH * (1 - v / max);
   let out = "";
   for (let i = 0; i <= 4; i++) {

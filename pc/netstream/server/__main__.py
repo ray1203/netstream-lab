@@ -1,4 +1,4 @@
-"""서버 실행:  python -m netstream.server --media "D:\\Videos" """
+"""실행: python -m netstream.server --media "D:\\Videos" """
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from .transcoder import LADDER, Transcoder, find_tool
 
 
 def lan_address() -> str:
-    """이 PC의 LAN 주소. 실제로 패킷을 보내지는 않고 라우팅 결과만 확인한다."""
+    # UDP connect는 패킷을 안 보냄. 어느 IP로 나가는지만 확인
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         probe.connect(("10.255.255.255", 1))

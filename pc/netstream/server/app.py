@@ -1,4 +1,4 @@
-"""서버 본체: 제어 채널, 데이터 채널(TCP/UDP), 세션, 스트림."""
+"""서버 본체 (세션, 스트림, 제어/데이터 채널)"""
 
 from __future__ import annotations
 
@@ -17,18 +17,15 @@ from .transcoder import LADDER, Transcoder, quality_index
 
 log = logging.getLogger("netstream.server")
 
-LEAD_MS = 3000          # 실시간보다 이만큼 앞서 보낸다. 이것이 클라이언트 버퍼가 된다.
-START_BURST_MS = 500    # 처음 이만큼은 바로 보낸다 (재생이 곧바로 시작되도록)
-CATCH_UP_RATE = 2.0     # 그 뒤로 LEAD를 채울 때까지는 실시간의 2배 속도까지만. 한꺼번에 쏟아내면 그것 때문에 혼잡 손실이 생긴다.
-RTX_BUFFER_PACKETS = 4096  # 재전송용으로 기억해 두는 최근 패킷 수 (약 5MB)
+LEAD_MS = 3000          # 실시간보다 3초 앞서 보냄 = 클라이언트 버퍼
+START_BURST_MS = 500    # 처음 0.5초 분량은 바로 보냄
+CATCH_UP_RATE = 2.0     # 그 뒤엔 2배속까지만. 한번에 쏟으면 대역폭 제한에 걸려서 손실남
+RTX_BUFFER_PACKETS = 4096  # 재전송용 보관 개수 (약 5MB)
 MAX_NACK_SEQS = 200
 
 
 class Stream:
-    """영상 하나를 한 가지 화질로 한 클라이언트에게 보내는 작업.
-
-    ffmpeg 출력 -> 1316바이트 청크 -> 헤더를 붙여 패킷으로 -> 속도 조절 -> TCP 또는 UDP로 전송
-    """
+    # ffmpeg 출력 -> 1316바이트씩 -> 헤더 붙임 -> 속도 조절 -> TCP/UDP 전송
 
     def __init__(self, session: "Session", stream_id: int, video: Video, mode: str, level: int, position: float):
         self.session = session
@@ -48,11 +45,10 @@ class Stream:
         self._t0 = perf_counter()
 
     def position(self) -> float:
-        """지금까지 보낸 지점(영상 기준 초)."""
         return self.start_position + self.media_ms / 1000.0
 
     async def start(self) -> None:
-        # ffmpeg를 먼저 띄우고 나서 전송 작업을 만든다. 띄우는 도중에 취소되면 프로세스가 고아로 남기 때문이다.
+        # ffmpeg 먼저 띄우고 task 생성 (spawn 중에 cancel되면 프로세스가 남음)
         self._proc = await self.session.server.transcoder.spawn(self.video, self.quality, self.start_position)
         self._task = asyncio.create_task(self._run())
 
@@ -93,8 +89,8 @@ class Stream:
                     if first_pcr is None:
                         first_pcr = pcr
                     self.media_ms = max(self.media_ms, pcr - first_pcr)
-                # 속도 조절: 영상 시각이 (경과 시간 + LEAD)보다 앞서 있으면 기다린다.
-                # ffmpeg는 최대한 빨리 인코딩하지만 파이프가 차면 멈추므로, 결국 여기서 정한 속도를 따른다.
+                # 속도 조절. 영상 시각이 허용치보다 앞서면 sleep
+                # (ffmpeg는 파이프가 차면 알아서 멈춤)
                 now = self._loop.time()
                 if pace_start is None:
                     pace_start = now
@@ -113,7 +109,7 @@ class Stream:
                 session.event(f"트랜스코딩 실패: {detail}")
                 session.send({"type": "ERROR", "stream_id": self.id, "message": f"트랜스코딩 실패: {detail}"})
                 return
-            # 끝 표시: 데이터 채널에 EOS 패킷, 제어 채널에도 총 패킷 수를 알린다 (UDP에서는 EOS 패킷이 사라질 수 있다)
+            # EOS는 제어 채널로도 보냄 (UDP면 EOS 패킷이 없어질 수 있어서)
             await self._send(b"", flags=P.FLAG_EOS)
             self.finished = True
             session.send({"type": "EOS", "stream_id": self.id, "packets": self.next_seq})
@@ -128,7 +124,7 @@ class Stream:
                 except ProcessLookupError:
                     pass
                 await self._proc.wait()
-            # Windows에서 파이프를 명시적으로 닫지 않으면 종료 시 "closed pipe" 경고가 찍힌다
+            # 윈도우에서 이거 안 하면 closed pipe 경고 뜸
             transport = getattr(self._proc, "_transport", None) if self._proc else None
             if transport:
                 transport.close()
@@ -169,7 +165,7 @@ class Stream:
             await link.send(packet)
 
     def retransmit(self, seqs: list) -> None:
-        """NACK로 요청받은 패킷을 다시 보낸다. 재전송도 열화 시뮬레이터를 거친다."""
+        # 재전송도 시뮬레이터를 거침 (또 손실될 수 있음)
         link = self.session.udp_link
         if self.mode != "udp" or link is None:
             return
@@ -185,7 +181,6 @@ class Stream:
 
 
 class Session:
-    """제어 채널 연결 하나 = 클라이언트 한 명."""
 
     def __init__(self, server: "NetStreamServer", reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.server = server
@@ -196,7 +191,7 @@ class Session:
         self.name = "?"
         self.flush_on_change = False
         self.nack = False
-        self.quality_setting = server.default_quality  # "auto" 또는 화질 이름
+        self.quality_setting = server.default_quality  # auto 또는 화질 이름
         self.counters = Counters()
         self.tcp_link: TcpLink | None = None
         self.udp_link: UdpLink | None = None
@@ -206,10 +201,9 @@ class Session:
         self.report_time = 0.0
         self._stream_ids = 0
         self._closed = False
-        # 재생, 탐색, 화질 변경이 겹치지 않게 한다 (대시보드의 요청은 다른 작업에서 들어온다)
+        # 재생/탐색/화질변경이 겹치면 안 됨 (대시보드 요청은 다른 task에서 옴)
         self._stream_lock = asyncio.Lock()
 
-    # ----- 보내기 -----
 
     def send(self, message: dict) -> None:
         if not self.writer.is_closing():
@@ -234,7 +228,6 @@ class Session:
             "current_quality": self.stream.quality.name if self.stream else None,
         }
 
-    # ----- 받기 -----
 
     async def run(self) -> None:
         log.info("클라이언트 연결: %s", self.peer)
@@ -268,7 +261,7 @@ class Session:
     async def handle(self, m: dict) -> None:
         kind = m.get("type")
         if kind == "PING":
-            # RTT 측정용. 시뮬레이터의 지연을 여기에도 적용해 대시보드의 RTT가 설정과 맞도록 한다.
+            # 시뮬레이터 지연을 여기도 적용해야 RTT가 맞게 나옴
             delay = self.server.impairment.delay_ms / 1000.0
             pong = {"type": "PONG", "t": m.get("t")}
             if delay > 0:
@@ -367,7 +360,6 @@ class Session:
             self.send({"type": "ERROR", "stream_id": stream.id, "message": f"ffmpeg를 실행하지 못했습니다: {error}"})
 
     def _max_level(self, video: Video) -> int:
-        """원본보다 큰 해상도로 키우지 않는다."""
         if not video.height:
             return len(LADDER) - 1
         level = 0
@@ -382,7 +374,6 @@ class Session:
         return self.stream
 
     async def apply_options(self, values: dict) -> None:
-        """NACK와 화질 설정을 바꾼다. 클라이언트와 대시보드 양쪽에서 호출된다."""
         if "nack" in values:
             nack = bool(values["nack"])
             if nack != self.nack:
@@ -419,13 +410,13 @@ class Session:
                     await self.change_quality(level, f"ABR, {reason}")
 
     async def change_quality(self, level: int, reason: str) -> None:
-        """같은 위치에서 다른 화질로 ffmpeg를 다시 띄운다. 클라이언트에는 STREAM_CHANGE로 알린다."""
+        # 같은 위치에서 다른 화질로 ffmpeg 재시작
         async with self._stream_lock:
             old = self.stream
             if old is None or old.finished or old.level == level:
                 return
             position = old.position()
-            # 버퍼를 비우고 새로 시작하는 클라이언트(Android)에는 실제 재생 위치부터 다시 보낸다
+            # 안드로이드는 버퍼를 비우니까 재생 위치부터 다시 보냄
             if self.flush_on_change and isinstance(self.report.get("position"), (int, float)):
                 position = min(position, max(old.start_position, float(self.report["position"])))
             await old.stop()
@@ -452,7 +443,7 @@ class _UdpProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr) -> None:
-        # 클라이언트가 보내는 것은 ATTACH뿐이다: "내 UDP 주소는 이 데이터그램의 출발지다"
+        # 클라이언트가 보내는 건 주소 등록뿐. 출발지 주소를 기억해둠
         if not data.startswith(P.UDP_ATTACH_MAGIC):
             return
         token = data[len(P.UDP_ATTACH_MAGIC):].decode("ascii", "replace")
@@ -536,7 +527,6 @@ class NetStreamServer:
             session.tcp_link = link
             writer.write(P.encode_frame({"type": "ATTACH_OK"}))
             log.info("TCP 데이터 채널 연결: %s", session.name)
-            # 이 연결로는 서버가 보내기만 한다. 상대가 닫을 때까지 기다린다.
             while await reader.read(4096):
                 pass
         except (ConnectionError, OSError, ValueError, asyncio.TimeoutError):

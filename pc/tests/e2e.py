@@ -1,7 +1,5 @@
-"""통합 시험: 서버와 클라이언트를 한 프로세스에서 띄워 실제 소켓으로 영상을 주고받는다.
-
-실행 (pc 폴더에서):  python -m tests.e2e
-ffmpeg가 필요하다. 시험 영상(testsrc)은 처음 실행할 때 samples 폴더에 만든다.
+"""통합 테스트. 서버랑 클라이언트를 같이 띄워서 실제 소켓으로 주고받음
+실행: python -m tests.e2e  (pc 폴더에서, ffmpeg 필요)
 """
 
 from __future__ import annotations

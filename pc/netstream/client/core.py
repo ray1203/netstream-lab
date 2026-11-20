@@ -1,4 +1,4 @@
-"""PC 테스트 클라이언트의 네트워크 부분. Android 앱과 같은 프로토콜을 쓴다."""
+"""PC 테스트 클라이언트 (네트워크 부분)"""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from .receiver import JitterMeter, PlayClock, ReorderBuffer
 
 
 class NullSink:
-    """받은 데이터를 버린다 (재생 없이 통계만 볼 때)."""
 
     def write(self, data: bytes) -> None:
         pass
@@ -45,8 +44,8 @@ class Client:
         self.port = port
         self.sink = sink or NullSink()
         self.name = name
-        self.on_report = None   # 1초마다 통계(dict)를 받는 콜백
-        self.on_message = None  # 서버가 보낸 알림을 받는 콜백
+        self.on_report = None
+        self.on_message = None
 
         self.hello: dict = {}
         self.nack = False
@@ -77,7 +76,6 @@ class Client:
         self._bytes = 0
         self._snapshot = (0, 0, 0, 0, 0, 0)
 
-    # ----- 연결 -----
 
     async def connect(self) -> dict:
         self._loop = asyncio.get_running_loop()
@@ -107,7 +105,6 @@ class Client:
             self._writer.write(P.encode_frame(message))
 
     async def request(self, message: dict, timeout: float = 15.0) -> dict:
-        """요청을 보내고 같은 id의 응답을 기다린다."""
         request_id = next(self._ids)
         future = self._loop.create_future()
         self._pending[request_id] = future
@@ -152,7 +149,7 @@ class Client:
             if m.get("current_quality"):
                 self.quality = m["current_quality"]
         elif kind == "STREAM_CHANGE":
-            # 서버가 화질을 바꿨다: 새 stream_id로 이어서 받는다
+            # 서버가 화질 바꿈
             self.quality = m.get("quality")
             self._begin_stream(m["stream_id"], float(m.get("position") or 0.0))
         elif kind == "SWITCH_MODE":
@@ -164,7 +161,6 @@ class Client:
         if self.on_message:
             self.on_message(m)
 
-    # ----- 데이터 채널 -----
 
     async def _ensure_tcp(self) -> None:
         if self._tcp_writer and not self._tcp_writer.is_closing():
@@ -192,7 +188,7 @@ class Client:
         if self._udp_transport is None:
             self._udp_transport, _ = await self._loop.create_datagram_endpoint(
                 lambda: _UdpReceiver(self), remote_addr=(self.host, self.hello["udp_data_port"]))
-            # 처음 3초 분량이 한꺼번에 오므로 수신 버퍼를 넉넉히 잡는다. 작으면 커널이 버려서 "가짜 손실"이 생긴다.
+            # 기본 버퍼(64KB)면 처음에 몰려올 때 넘쳐서 손실로 잡힘
             sock = self._udp_transport.get_extra_info("socket")
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
             self._tasks.append(asyncio.create_task(self._udp_keepalive()))
@@ -225,11 +221,11 @@ class Client:
 
     def _on_data(self, size: int, stream_id: int, seq: int, send_ms: int, media_ms: int, flags: int, payload: bytes) -> None:
         if stream_id != self.stream_id:
-            return  # 이전 스트림의 늦은 패킷
+            return  # 이전 스트림 패킷
         now = self._loop.time()
         self._bytes += size
         if not flags & P.FLAG_RTX:
-            # perf_counter: Windows의 기본 monotonic 시계는 15ms 단위라 지터를 재기에 너무 거칠다
+            # loop.time()은 윈도우에서 15ms 단위라 못 씀
             self._jitter.on_packet(send_ms, time.perf_counter() * 1000)
         self._reorder.on_packet(seq, media_ms, flags, payload, now)
 
@@ -292,13 +288,11 @@ class Client:
             if self.on_report:
                 self.on_report(report)
 
-    # ----- 명령 -----
 
     async def list_videos(self) -> list[dict]:
         return (await self.request({"type": "LIST"}))["videos"]
 
     def position(self) -> float:
-        """지금까지 받은 지점(영상 기준 초)."""
         return self._stream_start + self._last_media_ms / 1000.0
 
     async def play(self, video_id: int, mode: str, position: float = 0.0, restart_sink: bool = True) -> dict:

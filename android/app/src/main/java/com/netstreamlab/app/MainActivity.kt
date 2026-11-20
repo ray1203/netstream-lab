@@ -181,7 +181,7 @@ private fun PlayerScreen(state: UiState, vm: PlayerViewModel) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(state.current?.name ?: "", maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
 
-            // 탐색: 손을 뗄 때 서버에 새 위치를 요청한다
+            // 손 뗄 때 seek 요청
             if (state.durationSec > 0f) {
                 var dragging by remember { mutableStateOf<Float?>(null) }
                 Slider(

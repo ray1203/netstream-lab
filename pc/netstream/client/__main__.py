@@ -1,6 +1,5 @@
-"""PC 테스트 클라이언트 실행:  python -m netstream.client --host 127.0.0.1
-
-받은 MPEG-TS를 ffplay의 표준 입력으로 넘겨 재생한다. 명령은 터미널에 입력한다.
+"""실행: python -m netstream.client --host 127.0.0.1
+받은 TS는 ffplay stdin으로 넘김
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ HELP = """명령:
 
 
 class FfplaySink:
-    """받은 TS를 ffplay로 넘긴다. 파이프 쓰기가 막혀도 수신이 멈추지 않도록 별도 스레드에서 쓴다."""
+    # 파이프 쓰기가 막힐 수 있어서 스레드로 분리
 
     def __init__(self, ffplay: str):
         self.ffplay = ffplay
@@ -68,7 +67,7 @@ class FfplaySink:
                 proc.stdin.write(data)
                 proc.stdin.flush()
             except (OSError, ValueError):
-                return  # 사용자가 ffplay 창을 닫았다
+                return  # ffplay 창 닫음
 
     def close(self) -> None:
         with self._cond:

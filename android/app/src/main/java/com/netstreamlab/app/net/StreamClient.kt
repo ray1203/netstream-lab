@@ -24,12 +24,12 @@ data class VideoInfo(val id: Int, val name: String, val durationSec: Double?, va
 
 data class PlayResult(val pipe: TsPipe, val quality: String, val position: Double, val durationSec: Double?)
 
-/** 1초 동안의 수신 통계. 화면에 보여 주고 서버에도 보낸다. */
+// 1초 단위 수신 통계
 data class Report(
     val mode: String = "",
     val kbps: Int = 0,
-    val lossRate: Double = 0.0,      // 최종 손실 (NACK 복구 후)
-    val rawLossRate: Double = 0.0,   // 재전송 전 손실
+    val lossRate: Double = 0.0,      // NACK 복구 후
+    val rawLossRate: Double = 0.0,   // 복구 전
     val lost: Long = 0,
     val recovered: Long = 0,
     val reordered: Long = 0,
@@ -38,15 +38,9 @@ data class Report(
     val bufferMs: Long = 0,
 )
 
-/**
- * 서버와의 모든 통신을 맡는다.
- *
- * - 제어 채널: TCP. 요청과 응답은 id로 짝을 맞춘다.
- * - 데이터 채널: TCP 모드는 별도 TCP 연결, UDP 모드는 DatagramSocket.
- * - 받은 MPEG-TS는 TsPipe에 넣고, 플레이어가 거기서 꺼내 재생한다.
- *
- * 소켓 호출은 모두 블로킹이라서 메인 스레드에서 부르면 안 된다 (ViewModel이 별도 스레드에서 부른다).
- */
+// 서버 통신 전부 (제어 TCP, 데이터 TCP/UDP)
+// 받은 TS는 TsPipe에 넣으면 플레이어가 꺼내감
+// 전부 블로킹이라 메인 스레드에서 부르면 안 됨
 class StreamClient(private val host: String, private val port: Int, private val listener: Listener) {
 
     interface Listener {
@@ -58,7 +52,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
         fun onReport(report: Report)
     }
 
-    // 플레이어 상태. 메인 스레드(ViewModel)가 주기적으로 채워 넣고, 보고할 때 읽는다.
+    // 플레이어 상태 (ViewModel이 채워줌, REPORT 보낼 때 읽음)
     @Volatile var playerBufferMs = 0L
     @Volatile var playerPositionSec = 0.0
     @Volatile var playerStalled = false
@@ -84,7 +78,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
     @Volatile private var udpAttached = CountDownLatch(1)
     @Volatile private var rttMs: Double? = null
 
-    // 현재 스트림의 상태. lock으로 보호한다 (수신 스레드, 타이머 스레드, 제어 스레드가 함께 쓴다).
+    // 아래는 여러 스레드가 같이 써서 lock 필요
     private val lock = Any()
     private var streamId = -1
     private var mode = "tcp"
@@ -98,7 +92,6 @@ class StreamClient(private val host: String, private val port: Int, private val 
 
     private fun now(): Double = System.nanoTime() / 1e9
 
-    // ----- 연결 -----
 
     @Throws(IOException::class)
     fun connect() {
@@ -112,7 +105,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
         val hello = request(
             JSONObject().put("type", "HELLO").put("client", "Android ${android.os.Build.MODEL}")
                 .put("version", Protocol.VERSION)
-                // 화질이 바뀌면 플레이어 버퍼를 비우고 새로 시작한다는 뜻. 서버는 재생 위치부터 다시 보낸다.
+                // 화질 바뀌면 플레이어를 다시 준비하니까 재생 위치부터 다시 달라는 뜻
                 .put("flush_on_change", true)
         )
         serverName = hello.optString("server")
@@ -132,12 +125,11 @@ class StreamClient(private val host: String, private val port: Int, private val 
         timer.scheduleAtFixedRate(guard(::udpKeepAlive), 5, 5, TimeUnit.SECONDS)
     }
 
-    /** 타이머 작업에서 예외가 나면 그 뒤로 실행이 멈추므로 막아 둔다. */
+    // scheduleAtFixedRate는 예외 한 번 나면 그 뒤로 안 돌아서 감쌈
     private fun guard(block: () -> Unit) = Runnable {
         try {
             block()
         } catch (e: Exception) {
-            // 연결이 끊어지면 controlLoop가 알린다
         }
     }
 
@@ -149,7 +141,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
             streamId = -1
             pipe?.close()
         }
-        // 소켓을 닫으면 블로킹 중인 수신 스레드들이 예외를 받고 끝난다
+        // 소켓 닫으면 수신 스레드들도 끝남
         runCatching { control?.close() }
         runCatching { tcpData?.close() }
         runCatching { udp?.close() }
@@ -160,7 +152,6 @@ class StreamClient(private val host: String, private val port: Int, private val 
         synchronized(sendLock) { Protocol.writeFrame(out, message) }
     }
 
-    /** 요청을 보내고 같은 id의 응답을 기다린다. */
     @Throws(IOException::class)
     private fun request(message: JSONObject): JSONObject {
         val id = requestIds.getAndIncrement()
@@ -186,7 +177,6 @@ class StreamClient(private val host: String, private val port: Int, private val 
                 if (slot != null) slot.offer(message) else onControl(message)
             }
         } catch (e: Exception) {
-            // 아래에서 끊어짐으로 처리
         }
         for (slot in pending.values) slot.offer(JSONObject().put("type", "ERROR").put("message", "서버와의 연결이 끊어졌습니다"))
         if (!closed) listener.onDisconnected()
@@ -206,7 +196,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
                 listener.onOptions(nack, qualitySetting, current)
             }
             "STREAM_CHANGE" -> {
-                // 서버가 화질을 바꿨다: 새 stream_id의 데이터를 새 통로로 받는다
+                // 서버가 화질 바꿈 -> 새 pipe로 받음
                 val newPipe = beginStream(m.getInt("stream_id"), synchronized(lock) { mode })
                 listener.onStreamChanged(newPipe, m.optString("quality"), m.optDouble("position", 0.0))
             }
@@ -218,7 +208,6 @@ class StreamClient(private val host: String, private val port: Int, private val 
         }
     }
 
-    // ----- 데이터 채널 -----
 
     @Throws(IOException::class)
     private fun ensureTcpData() {
@@ -252,7 +241,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
         var socket = udp
         if (socket == null || socket.isClosed) {
             socket = DatagramSocket()
-            // 처음 3초 분량이 한꺼번에 오므로 수신 버퍼를 넉넉히 잡는다. 작으면 커널이 버려서 가짜 손실이 생긴다.
+            // 기본 버퍼면 처음에 몰려올 때 넘쳐서 손실로 잡힘
             socket.receiveBufferSize = 4 shl 20
             socket.connect(InetAddress.getByName(host), udpDataPort)
             udp = socket
@@ -269,11 +258,10 @@ class StreamClient(private val host: String, private val port: Int, private val 
                         onData(packet, datagram.length)
                     }
                 } catch (e: Exception) {
-                    // 소켓이 닫혔다
                 }
             }
         }
-        // 서버는 이 데이터그램의 출발지 주소로 영상을 보낸다. UDP라서 사라질 수 있으니 확인될 때까지 반복한다.
+        // 서버가 이 패킷의 출발지 주소로 영상을 보냄. 없어질 수 있으니 확인될 때까지 반복
         val latch = udpAttached
         repeat(25) {
             sendUdpAttach()
@@ -309,20 +297,19 @@ class StreamClient(private val host: String, private val port: Int, private val 
 
     private fun onData(packet: DataPacket, size: Int) {
         synchronized(lock) {
-            if (packet.streamId != streamId) return  // 이전 스트림의 늦은 패킷
+            if (packet.streamId != streamId) return  // 이전 스트림 패킷
             bytes += size
             if (!packet.isRetransmit) jitter.onPacket(packet.sendMs, System.nanoTime() / 1e6)
             if (mode == "udp") {
                 reorder.onPacket(packet, now())
             } else {
-                // TCP는 커널이 순서와 재전송을 이미 처리했다. 받은 그대로 넘긴다.
+                // TCP는 순서 보장되니까 그대로 넘김
                 tcpDelivered++
                 deliver(packet)
             }
         }
     }
 
-    /** lock을 잡은 상태에서 불린다. */
     private fun deliver(packet: DataPacket) {
         if (packet.isEndOfStream) finishStream() else pipe?.write(packet.payload)
     }
@@ -344,7 +331,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
             id = streamId
         }
         if (request.isNotEmpty()) {
-            // 잃어버린 패킷 번호를 TCP 제어 채널로 알린다. 요청 자체는 사라지면 안 되므로 TCP가 맞다.
+            // NACK는 제어 채널(TCP)로 보냄. 요청까지 없어지면 안 되니까
             send(JSONObject().put("type", "NACK").put("stream_id", id).put("seqs", JSONArray(request)))
         }
     }
@@ -395,7 +382,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
         listener.onReport(result)
     }
 
-    // ----- 명령 (블로킹. 메인 스레드에서 부르지 말 것) -----
+    // 여기부터 블로킹 호출 (메인 스레드 X)
 
     @Throws(IOException::class)
     fun listVideos(): List<VideoInfo> {
@@ -411,7 +398,7 @@ class StreamClient(private val host: String, private val port: Int, private val 
         }
     }
 
-    /** 재생, 탐색, 전송 모드 전환 모두 이 요청 하나다. 새 스트림을 받을 통로를 돌려준다. */
+    // 재생/탐색/모드 전환 다 이걸로 함
     @Throws(IOException::class)
     fun play(videoId: Int, newMode: String, position: Double): PlayResult {
         if (newMode == "tcp") ensureTcpData() else ensureUdp()

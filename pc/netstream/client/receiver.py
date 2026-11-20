@@ -1,7 +1,5 @@
-"""UDP 수신 측 로직: 순서 맞추기, 손실 감지, NACK 대상 고르기, 지터와 버퍼 계산.
-
-네트워크 코드와 분리해 순수한 계산만 담았다 (시각을 인자로 받는다). 그래서 단위 테스트가 쉽고,
-Android 앱의 ReorderBuffer.kt도 같은 알고리즘을 그대로 옮긴 것이다.
+"""UDP 수신 로직 (순서 맞추기, 손실 감지, NACK, 지터)
+소켓 코드랑 분리해둠. 안드로이드 ReorderBuffer.kt도 같은 방식
 """
 
 from __future__ import annotations
@@ -10,26 +8,24 @@ from typing import Callable
 
 from ..protocol import FLAG_EOS, FLAG_RTX
 
-REORDER_WAIT = 0.06    # NACK를 쓰지 않을 때: 늦게 오는 패킷을 이만큼만 기다리고 포기한다
-NACK_WAIT = 0.6        # NACK를 쓸 때: 재전송이 올 때까지 기다리는 최대 시간
-NACK_GRACE = 0.02      # 빈자리를 발견하고 이만큼 지나야 NACK를 보낸다 (단순한 순서 뒤바뀜일 수 있으므로)
+REORDER_WAIT = 0.06    # NACK 꺼져 있을 때 기다리는 시간
+NACK_WAIT = 0.6        # NACK 켜져 있을 때
+NACK_GRACE = 0.02      # 바로 NACK 안 보내고 조금 기다림 (순서만 바뀐 걸 수도 있어서)
 NACK_MIN_INTERVAL = 0.08
 MAX_NACKS_PER_PACKET = 4
 MAX_NACK_BATCH = 100
-MAX_GAP = 3000         # 이보다 큰 구멍은 복구를 포기하고 건너뛴다
+MAX_GAP = 3000         # 이것보다 크게 비면 그냥 건너뜀
 
 
 class ReorderBuffer:
-    """seq 순서대로 payload를 내보낸다. TCP가 커널 안에서 하는 일의 일부를 직접 구현한 것."""
 
     def __init__(self, deliver: Callable[[int, int, int, bytes], None]):
-        self.deliver = deliver          # deliver(seq, media_ms, flags, payload)
-        self.next_seq = 0               # 다음에 내보낼 번호
-        self.highest = -1               # 지금까지 본 가장 큰 번호
-        self.total: int | None = None   # 스트림의 총 패킷 수 (EOS를 받으면 알게 된다)
+        self.deliver = deliver
+        self.next_seq = 0  # 다음에 내보낼 번호
+        self.highest = -1
+        self.total: int | None = None  # EOS 받으면 알게 됨
         self._buffer: dict[int, tuple[int, int, bytes]] = {}
-        self._missing: dict[int, list[float]] = {}  # seq -> [발견 시각, NACK 횟수, 마지막 NACK 시각]
-        # 누적 통계
+        self._missing: dict[int, list[float]] = {}  # seq -> [발견 시각, nack 횟수, 마지막 nack 시각]
         self.received = 0
         self.delivered = 0
         self.lost = 0
@@ -49,10 +45,10 @@ class ReorderBuffer:
     def on_packet(self, seq: int, media_ms: int, flags: int, payload: bytes, now: float) -> None:
         self.received += 1
         if seq < self.next_seq or seq in self._buffer:
-            self.duplicates += 1  # 이미 받았거나, 포기한 뒤에 도착했다
+            self.duplicates += 1  # 중복이거나 포기한 뒤에 온 것
             return
         if seq in self._missing:
-            # 빈자리가 채워졌다: 재전송으로 왔으면 복구, 원래 패킷이 늦게 왔으면 순서 뒤바뀜
+            # RTX로 왔으면 복구, 아니면 순서만 바뀐 것
             if flags & FLAG_RTX:
                 self.recovered += 1
             else:
@@ -67,7 +63,6 @@ class ReorderBuffer:
         self._flush()
 
     def mark_end(self, total: int, now: float) -> None:
-        """제어 채널의 EOS로 총 패킷 수를 알게 됐다. 끝부분에서 잃은 패킷도 빈자리로 잡는다."""
         self.total = total
         if total - 1 > self.highest:
             self._mark_missing(self.highest + 1, total, now)
@@ -98,7 +93,7 @@ class ReorderBuffer:
             self.next_seq += 1
 
     def poll(self, now: float, nack_enabled: bool, rtt: float) -> list[int]:
-        """주기적으로(10ms) 부른다. 너무 오래 기다린 빈자리는 포기하고, NACK로 요청할 번호를 돌려준다."""
+        # 10ms마다 호출. 오래된 빈자리는 포기하고 NACK 보낼 번호를 리턴
         wait = max(NACK_WAIT, 5 * rtt) if nack_enabled else REORDER_WAIT
         while self.next_seq in self._missing and now - self._missing[self.next_seq][0] >= wait:
             del self._missing[self.next_seq]
@@ -123,11 +118,8 @@ class ReorderBuffer:
 
 
 class JitterMeter:
-    """도착 간격 지터 (RFC 3550, RTP와 같은 방식).
-
-    transit = 도착 시각 - 송신 시각. 두 시계의 기준이 달라도 "transit의 변화량"은 의미가 있다.
-    J = J + (|D| - J) / 16
-    """
+    # RFC 3550 지터.  J += (|D| - J) / 16
+    # transit = 도착 - 송신. 시계 기준이 달라도 차이값은 쓸 수 있음
 
     def __init__(self):
         self.jitter_ms = 0.0
@@ -141,10 +133,7 @@ class JitterMeter:
 
 
 class PlayClock:
-    """플레이어 버퍼를 흉내 낸다 (PC 테스트 클라이언트용. Android 앱은 ExoPlayer의 실제 값을 쓴다).
-
-    받은 영상 분량(ms)을 쌓고, 재생 중에는 실제 시간만큼 뺀다. 0이 되면 멈춘 것(stall)으로 센다.
-    """
+    # ffplay 버퍼는 알 수가 없어서 추정함 (받은 분량 - 재생된 시간)
 
     START_MS = 500.0
 
