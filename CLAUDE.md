@@ -30,7 +30,12 @@
 - [x] 측정 데이터 정리 -> `report/측정결과.md` (11/24, 표만. 그래프는 사용자가 안 만들기로 함). 다시 재려면 `python -m tools.measure` 후 `python -m tools.summarize`
 - [ ] (선택) 지터가 클 때 불필요한 NACK 재전송 고치기. 아래 "알려진 문제" 첫 줄
 - [ ] 시연 GIF나 영상, README에 넣기
-- [ ] 보고서 작성
+- [x] 보고서 초안 (11/24, 영어, Word). `report/NetStreamLab_1_User_Guide.docx`(소개+사용법), `report/NetStreamLab_2_Technical_Report.docx`(기술+측정)
+  - 사용자가 이름/학번 채우고 내용 검토해야 함. AI가 초안을 썼다는 것도 보고서 11절에 적혀 있음
+  - 그림: `python -m tools.figures` (matplotlib 필요) -> `report/figures/`
+  - 문서 다시 만들기: `report/docsrc/`에서 `npm install docx` 후 `node guide.js ../figures ../NetStreamLab_1_User_Guide.docx`, `node tech.js ../figures ../NetStreamLab_2_Technical_Report.docx`
+  - 측정을 다시 하면 tech.js 안의 표 숫자는 손으로 고쳐야 함 (CSV에서 자동으로 안 읽음)
+  - 렌더링 확인: 이 PC엔 LibreOffice/pdftoppm이 없어서 Word COM으로 쪽을 이미지로 뽑아 확인했음
 - [ ] 제출 전 저장소 공개 전환: `gh repo edit ray1203/netstream-lab --visibility public --accept-visibility-change-consequences`
 - [ ] 사용자가 `AI_LOG.md` 끝의 "내가 따로 공부해야 할 것" 항목들 직접 설명할 수 있게 준비
 - [ ] (선택) 긴 실제 영상으로 테스트. 지금까지는 60초짜리 테스트 패턴만 씀

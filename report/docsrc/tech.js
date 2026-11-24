@@ -1,0 +1,213 @@
+const { p, h1, h2, bullet, code, figure, table, caption, titleBlock, build } = require("./lib");
+
+const REPO = "https://github.com/ray1203/netstream-lab";
+
+const doc = [
+  titleBlock("NetStream Lab", "Technical Report: Streaming the Same Video over TCP and UDP", [
+    "Computer Networks, Assignment 4",
+    "Name / Student ID: (fill in)",
+    "Repository: " + REPO,
+  ]),
+
+  h1("1. Goal"),
+  p("The goal was to build a real application in which the behaviour of TCP and UDP can be seen and compared, not only described. I chose video streaming because it is sensitive to exactly the things the two protocols handle differently: lost packets, late packets and limited bandwidth."),
+  p("To keep the protocols visible, the program does not use HTTP or any streaming library for transport. Everything between the server and the client is a protocol I defined on top of plain TCP and UDP sockets. This report explains that protocol, how reliability and rate adaptation were added on top of UDP, and what the measurements show."),
+
+  h1("2. Architecture"),
+  figure("architecture.png", "Figure 1. Components and channels"),
+  table(["Component", "Role", "Main file"], [
+    ["Transcoder", "Runs ffmpeg to produce H.264 and AAC in an MPEG-TS stream", "`server/transcoder.py`"],
+    ["Session / Stream", "One session per client. A stream reads the ffmpeg output, cuts it into packets, paces them and sends them", "`server/app.py`"],
+    ["Impairment simulator", "Adds loss, delay, jitter and a bandwidth limit on the sending side", "`server/impair.py`"],
+    ["ABR controller", "Chooses the quality from the client's reports", "`server/abr.py`"],
+    ["Dashboard", "Small HTTP server written on asyncio sockets, pushes one sample per second with Server-Sent Events", "`server/dashboard.py`"],
+    ["Receiver", "Puts UDP packets back in order, detects loss, decides what to request again", "`client/receiver.py`, `ReorderBuffer.kt`"],
+    ["Player", "ExoPlayer on Android, ffplay on the PC", "`TsPipe.kt`"],
+  ], [20, 52, 28]),
+  p("The server is written in Python with asyncio and uses no third-party packages. The Android app is written in Kotlin. It feeds the bytes received from the sockets into ExoPlayer through a custom data source, so the player never opens a network connection itself."),
+
+  h1("3. Protocol design"),
+  h2("3.1 Three channels"),
+  table(["Channel", "Transport", "Port", "Carries"], [
+    ["Control", "TCP", "9000", "Commands, replies, NACK requests, statistics reports"],
+    ["Data, TCP mode", "TCP", "9001", "Video packets"],
+    ["Data, UDP mode", "UDP", "9002", "Video packets"],
+  ], [22, 16, 12, 50]),
+  p("Control messages must not be lost and must arrive in order, so they always use TCP. Only the video data changes between TCP and UDP. This also means that a NACK, which is a request to resend a lost UDP packet, travels over TCP. If the request itself could be lost, the client would need another mechanism to recover it."),
+
+  h2("3.2 Control messages"),
+  p("TCP is a byte stream and does not keep message boundaries. Two messages written separately can arrive as one read, or one message can arrive in pieces. So every control message is sent as a 4-byte big-endian length followed by that many bytes of UTF-8 JSON, and the receiver reads exactly that many bytes."),
+  code(["| length (4 bytes) | JSON (length bytes) |"]),
+  p("Requests carry an `id` and the reply repeats it, so the client can match replies to requests even when unrelated messages arrive in between."),
+  table(["Direction", "Messages"], [
+    ["Client to server", "HELLO, LIST, PLAY, STOP, SET_OPTIONS, NACK, PING, REPORT"],
+    ["Server to client", "HELLO_OK, LIST_OK, PLAY_OK, STREAM_CHANGE, OPTIONS, SWITCH_MODE, EOS, UDP_ATTACHED, PONG, ERROR"],
+  ], [26, 74]),
+  p("Seeking and switching between TCP and UDP do not have their own messages. The client sends PLAY again with a new position or mode. The full message reference is in `PROTOCOL.md`."),
+
+  h2("3.3 Data packet"),
+  figure("packet_header.png", "Figure 2. Data packet format, used in both TCP and UDP mode"),
+  table(["Field", "Purpose"], [
+    ["`stream_id`", "Changes on every seek, mode switch or quality change. Packets of an older stream that arrive late are dropped by comparing this field."],
+    ["`seq`", "Starts at 0 for each stream and increases by 1. Used to detect loss and reordering."],
+    ["`send_ms`", "Time the server sent the packet. Used to calculate jitter."],
+    ["`media_ms`", "Position of this data in the video, taken from the MPEG-TS clock. Used for pacing and to know how much video is buffered."],
+    ["`flags`", "0x01 marks a retransmitted packet, 0x02 marks the end of the stream."],
+    ["`len`", "Payload length. In TCP mode this is how the receiver finds where a packet ends."],
+  ], [20, 80]),
+  p("**Why the payload is 1316 bytes.** MPEG-TS consists of fixed 188-byte packets. Seven of them are 1316 bytes. With my 17-byte header, the 8-byte UDP header and the 20-byte IP header, a full packet is 1361 bytes, which is below the 1500-byte Ethernet MTU, so IP does not have to fragment it. Because packets are always cut on a 188-byte boundary, losing one UDP packet removes seven whole TS packets and the rest of the stream stays aligned. The decoder sees a gap, not garbage."),
+
+  h2("3.4 Registering the UDP address"),
+  p("The server needs to know where to send UDP packets. The client sends a small datagram containing a 4-byte tag and its session token to the server's UDP port. The server takes the source address of that datagram as the client's address. Since this datagram can be lost, the client repeats it every 0.2 seconds until the server confirms over the control channel."),
+
+  h1("4. Sending side"),
+  h2("4.1 Transcoding"),
+  p("ffmpeg converts the source to H.264 and AAC and writes MPEG-TS to its standard output. A keyframe is inserted every second, so that after a loss in UDP mode the picture recovers within one second. There are six quality levels from 144p (about 0.2 Mbps) to 1080p (about 5.7 Mbps). The measurements use 720p, about 2.9 Mbps."),
+  h2("4.2 Pacing with the stream clock"),
+  p("ffmpeg is allowed to encode as fast as it can. The server controls the rate itself. MPEG-TS contains a clock value called PCR, and the server reads it from each chunk to know which moment of the video the chunk belongs to. It then sends data only up to 3 seconds ahead of real time. Those 3 seconds are the client's buffer. When the server stops reading, the pipe fills up and ffmpeg waits."),
+  p("At first the server sent the whole 3 seconds immediately at the start of a stream. With a bandwidth limit this burst alone caused heavy loss, so now only the first 0.5 seconds are sent at once and the rest is filled at up to twice real-time speed."),
+
+  h1("5. Receiving over UDP"),
+  p("UDP delivers packets as they come: some are missing, some are out of order. The client rebuilds the order itself. This is the part of the project where I implemented a piece of what TCP normally does inside the operating system."),
+  bullet("When a packet arrives with a sequence number higher than expected, the numbers in between are recorded as holes."),
+  bullet("If a hole is later filled by a normal packet, it was only **reordering**. If it is filled by a packet with the retransmit flag, it counts as **recovered**."),
+  bullet("If the hole at the front is not filled in time, it is counted as **lost** and skipped. The wait is 60 ms without NACK, and the larger of 0.6 s and 5 x RTT with NACK."),
+  bullet("With NACK on, the client waits 20 ms after finding a hole and then sends the missing numbers over the control channel. It repeats the request up to 4 times, at least 80 ms or 2 x RTT apart."),
+  p("The server keeps the last 4096 packets so it can resend them. Retransmission is limited to 25% of the data rate with a token bucket. I added this limit after a test on a real phone, described in section 9."),
+  p("Jitter is calculated in the same way as in RTP (RFC 3550). For two consecutive packets, D is the change in (arrival time minus send time), and the estimate is updated as J = J + (|D| - J) / 16. The two clocks do not need to be synchronized because only the change is used."),
+
+  h1("6. Impairment simulator"),
+  p("Real Wi-Fi does not get worse on request, so the server can damage its own output. For UDP this is direct: a packet is dropped with the configured probability, or sent later. A bandwidth limit is a queue that drains at the configured rate, and packets are dropped when the queue is longer than 0.2 seconds."),
+  p("**TCP is different, and this is the main limitation of the project.** An application cannot drop a TCP segment, and even if a segment is lost on the network, the kernel retransmits it and the application never sees the loss. So in TCP mode I do not simulate the loss itself but its two consequences:"),
+  bullet("**Head-of-line blocking.** When a segment is lost, the data behind it cannot be delivered until the retransmission arrives, about one RTT later."),
+  bullet("**Congestion control.** TCP treats loss as a sign of congestion and reduces its rate. I used the Mathis formula as an upper limit: rate = 1.22 x MSS / (RTT x sqrt(p))."),
+  p("The UDP numbers in this report come from packets that were really dropped. The TCP numbers under loss come from this model. They show what the theory predicts and how the application reacts to it, but they are not a measurement of a real TCP stack."),
+
+  h1("7. Adaptive bitrate"),
+  p("Once a second the client reports its loss rate, buffer level and received rate. The server uses these rules:"),
+  bullet("After two bad reports in a row (loss above 3% after recovery, or the buffer is empty), go down to the highest quality that fits in 70% of the received rate, and at least one level."),
+  bullet("After ten good reports in a row, go up one level."),
+  bullet("If going up fails within 15 seconds, wait twice as long before the next attempt."),
+  p("To change quality the server restarts ffmpeg at the current position with new settings and gives the stream a new `stream_id`."),
+
+  h1("8. Measurements"),
+  h2("8.1 Method"),
+  p("The server and the PC test client ran on the same machine and talked over real sockets on 127.0.0.1. The video was a 1280x720, 30 fps test pattern at the 720p quality level (about 2.9 Mbps). Each condition was run once for 30 seconds from the start of the video and recorded every second. Averages leave out the first 3 seconds, when the buffer is being filled. The script is `pc/tools/measure.py` and the raw data is in the `report` folder."),
+  bullet("**Loss** is the share of packets missing before any retransmission. **Final loss** is what is still missing after NACK recovery."),
+  bullet("**Video received** is how many seconds of video arrived during the 30 seconds. Because the server sends 3 seconds ahead, a healthy run shows about 33."),
+  bullet("**Stalled** is the time during which the estimated buffer was empty."),
+
+  h2("8.2 Results", true),
+  caption("Table 1. All conditions, 30 seconds each, 720p"),
+  table(["Condition", "Mode", "Received (kbps)", "Loss (%)", "Final loss (%)", "Stalled (s)", "Video received (s)", "Resent (%)"], [
+    ["No impairment", "TCP", "2840", "0", "0", "0", "33.3", "0"],
+    ["", "UDP", "2866", "0", "0", "0", "33.3", "0"],
+    ["", "UDP+NACK", "2824", "0", "0", "0", "33.3", "0"],
+    ["1% loss", "TCP", "2829", "0", "0", "0", "33.3", "0"],
+    ["", "UDP", "2832", "1.10", "1.10", "0", "33.3", "0"],
+    ["", "UDP+NACK", "2812", "1.12", "0", "0", "33.3", "1.2"],
+    ["5% loss", "TCP", "2832", "0", "0", "0", "33.2", "0"],
+    ["", "UDP", "2732", "4.94", "4.94", "0", "33.2", "0"],
+    ["", "UDP+NACK", "2885", "4.55", "0", "0", "33.2", "4.7"],
+    ["5% loss + 100 ms delay", "TCP", "**585**", "0", "0", "**20**", "**6.1**", "0"],
+    ["", "UDP", "2706", "5.13", "5.13", "0", "33.2", "0"],
+    ["", "UDP+NACK", "2879", "4.92", "0", "0", "33.1", "5.2"],
+    ["50 ms delay + 50 ms jitter", "TCP", "2814", "0", "0", "0", "33.2", "0"],
+    ["", "UDP", "2846", "0", "0", "0", "33.2", "0"],
+    ["", "UDP+NACK", "3590", "0", "0", "0", "33.2", "24.9"],
+    ["1 Mbps bandwidth cap", "TCP", "1008", "0", "0", "19", "10.7", "0"],
+    ["", "UDP", "1002", "64.71", "64.71", "see 8.5", "33.1", "0"],
+    ["", "UDP+NACK", "1001", "71.28", "66.49", "see 8.5", "32.5", "24.7"],
+  ], [24, 13, 12, 9, 10, 10, 12, 10], [2, 3, 4, 5, 6, 7]),
+  figure("throughput.png", "Figure 3. Received rate by condition and mode"),
+  figure("media_received.png", "Figure 4. Seconds of video received in 30 seconds. Below the dashed line the player cannot keep up."),
+
+  h2("8.3 TCP hides loss and pays for it in time"),
+  p("In every condition TCP shows 0% loss. The cost appears elsewhere. With 5% loss and 100 ms delay, TCP received only 585 kbps, so in 30 seconds it delivered 6.1 seconds of video and playback was stalled for 20 seconds. Under the same condition UDP kept 2,706 kbps and never stalled, but 5.13% of the packets were missing."),
+  figure("tcp_vs_udp_timeseries.png", "Figure 5. 5% loss and 100 ms delay. TCP cannot reach the stream bitrate and its buffer stays near zero. UDP fills the 3-second buffer and keeps it.", 520),
+
+  h2("8.4 Loss alone does not slow TCP down, loss with delay does"),
+  p("With 5% loss and no added delay, TCP was as fast as without loss (2,832 kbps). The Mathis formula explains this. The limit depends on both the loss rate and the round-trip time:"),
+  table(["Condition", "RTT in the model", "Throughput limit", "Enough for 720p (2.9 Mbps)?"], [
+    ["1% loss", "10 ms", "about 14.2 Mbps", "Yes"],
+    ["5% loss", "10 ms", "about 6.4 Mbps", "Yes"],
+    ["5% loss + 100 ms delay", "110 ms", "about 579 kbps", "No"],
+  ], [30, 20, 22, 28]),
+  figure("mathis.png", "Figure 6. Throughput limit from the Mathis formula. On a link with a short round-trip time, even 5% loss leaves enough room for the stream. At 110 ms it does not.", 500),
+  p("The measured 585 kbps agrees with the calculated 579 kbps. This agreement is expected, because the formula is what the TCP model applies (section 6). What the experiment adds is the effect on the application: a rate five times lower than the video needs, and a player that is stalled two thirds of the time."),
+
+  h2("8.5 NACK recovers random loss cheaply"),
+  figure("loss.png", "Figure 7. Packets that never arrived. UDP alone loses what the network drops. With NACK the final loss is 0% in all three conditions.", 460),
+  p("With NACK, final loss was 0% at both 1% and 5% loss. The extra traffic was 1.2% and 4.7% of the packets sent, about the same as the loss rate. Only what was lost is sent again, and the sending rate of everything else is not reduced. This is the main difference from TCP, which gave the same 0% loss but had to slow the whole stream down."),
+  p("A note on the last two rows of Table 1. The PC client estimates stalling from how much video data has arrived and does not check whether it can be decoded. With 65% loss it reported no stall, but on a real phone the picture froze completely under the same condition (section 8.8). For those rows the phone result is the one to trust."),
+
+  h2("8.6 Reordering"),
+  caption("Table 2. Delay and jitter"),
+  table(["Condition", "Mode", "RTT (ms)", "Jitter (ms)", "Reordered packets"], [
+    ["No impairment", "TCP", "0.9", "0.1", "0"],
+    ["", "UDP", "0.8", "0.1", "0"],
+    ["5% loss + 100 ms delay", "TCP", "104.8", "3.7", "0"],
+    ["", "UDP", "108.9", "0.2", "0"],
+    ["50 ms delay + 50 ms jitter", "TCP", "63.9", "3.9", "0"],
+    ["", "UDP", "62.7", "14.0", "5081"],
+    ["", "UDP+NACK", "61.5", "13.4", "5414"],
+  ], [34, 16, 14, 16, 20], [2, 3, 4]),
+  p("With 50 ms of jitter, more than 5,000 UDP packets arrived out of order in 27 seconds, and none were lost, because the receiver waits 60 ms for late packets before giving up. TCP never delivers out of order."),
+
+  h2("8.7 When bandwidth is the problem"),
+  p("With a 1 Mbps limit and a 2.9 Mbps stream, no transport helps. TCP delivered about a third of the video (10.7 seconds in 30). UDP lost 65% of the packets. NACK made no difference to the final loss (66%), because the retransmissions have to pass through the same bottleneck, and it raised the loss before recovery from 64.7% to 71.3%. The only fix is to send less, which is what ABR does."),
+  figure("abr.png", "Figure 8. ABR with a 1 Mbps limit applied at 10 seconds (UDP, NACK off)", 520),
+  p("Two seconds after the limit was applied the server dropped from 720p to 240p, and the loss went to 0%. Later it tried one level up. 360p (about 0.8 Mbps) fits under the limit and stayed. 480p (about 1.5 Mbps) does not fit, the loss returned, and the server went back down. The short loss peaks at each change come from refilling the buffer faster than real time."),
+
+  h2("8.8 On a real phone"),
+  p("I repeated the demo on a Galaxy S23 Ultra over the university Wi-Fi with the same simulator settings. Each condition was observed for 10 to 40 seconds and not repeated, so these are observations more than measurements."),
+  caption("Table 3. Values reported by the phone"),
+  table(["Condition", "Mode", "Received (kbps)", "Loss (%)", "Final loss (%)", "Playback"], [
+    ["5% loss + 100 ms delay", "TCP", "about 575", "0", "0", "3 s of video in 15 s, stops repeatedly"],
+    ["", "UDP", "about 2,700", "3.7 to 6.7", "same", "does not stop"],
+    ["", "UDP+NACK", "about 2,800", "2.5 to 7.5", "mostly 0", "does not stop"],
+    ["1 Mbps cap, 720p fixed", "UDP+NACK", "about 1,000", "70 to 76", "60 to 70", "freezes after 5 s"],
+    ["1 Mbps cap, ABR", "UDP+NACK", "about 430 (240p)", "0", "0", "recovers after 4 s"],
+  ], [24, 14, 16, 12, 12, 22]),
+  p("The numbers match the PC measurements closely (575 and 585 kbps for TCP, about 5% loss for UDP). Without any simulated impairment the phone still saw 0.8 to 1.3% loss in the first seconds of a UDP stream, and once a burst of 37%. That is real Wi-Fi loss, and NACK recovered most of it."),
+
+  h1("9. Problems found and fixed"),
+  table(["Problem", "Cause", "Fix"], [
+    ["Measured jitter was 2 ms when 30 ms was configured", "Three causes together: the Windows event loop clock has a 15.6 ms resolution, ffmpeg wrote its output in 32 KB blocks, and the stream clock appeared only every 100 ms, so packets left in bursts", "High-resolution clock for the event loop, flush after every packet, clock value every 20 ms"],
+    ["ffmpeg processes could be left running", "A quality change and a play request overlapped and the task was cancelled while ffmpeg was starting", "Start ffmpeg before creating the task, and serialize stream changes with a lock"],
+    ["Loss came back after a quality change under a bandwidth limit", "The new stream sent 3 seconds of video at once", "Limit the catch-up speed to twice real time"],
+    ["On the phone, with a 1 Mbps limit and NACK on, the server sent 12 Mbps", "Heavy loss caused a flood of NACKs, and the retransmissions were four times larger than the video itself, which made the congestion worse", "Limit retransmission to 25% of the data rate with a token bucket. Confirmed on the phone: maximum 3.9 Mbps"],
+  ], [28, 40, 32]),
+  p("The last one was only found on the real phone. My automated test and the emulator runs never combined NACK with a bandwidth limit. It is also a small version of a real protocol design problem: a reliability mechanism that reacts to loss by sending more can make congestion worse."),
+  p("**One problem is still open.** In Table 1, UDP with NACK under 50 ms jitter resent 24.9% of the packets although nothing was lost. The client sends a NACK 20 ms after it notices a hole, but with 50 ms of jitter the packet is often just late. These retransmissions are unnecessary, and 24.9% is the retransmission limit being reached. The wait before a NACK should follow the measured jitter. I have not made this change yet."),
+
+  h1("10. Limitations"),
+  bullet("TCP behaviour under loss is a model (section 6). A real TCP stack with a modern congestion control algorithm would give different numbers."),
+  bullet("Each condition was measured once for 30 seconds on one machine. Loss is random, so the values change slightly between runs."),
+  bullet("On loopback the real round-trip time is under 1 ms. On the Wi-Fi I used it was 15 to 35 ms."),
+  bullet("The stall time of the PC client is an estimate and is wrong under very heavy loss (section 8.5)."),
+  bullet("NACK timing does not adapt to jitter (section 9)."),
+  bullet("There is no congestion control in UDP mode other than ABR. On a shared network this sender would not be fair to other traffic."),
+
+  h1("11. Use of Agentic AI", true),
+  p("I used Claude Code, an AI coding agent that can read and edit files and run commands, through the whole project. A dated record is in `AI_LOG.md` in the repository. In summary:"),
+  table(["Stage", "What the agent did", "What I did"], [
+    ["Planning", "Checked my environment, then asked what it could not find out itself (scope of the PC program, feature set, test device)", "Prepared the initial plan, answered the questions, decided the scope"],
+    ["Design", "Proposed the packet header, the UDP address registration, pacing by the stream clock, and pointed out that TCP loss cannot be produced at the application level", "Accepted or changed the proposals. The changes from my plan are listed in AI_LOG.md"],
+    ["Implementation", "Wrote most of the server, the PC client and the Android app", "Reviewed, ran it, asked for changes to comments and documents"],
+    ["Testing", "Wrote and ran the end-to-end test, ran the app in an emulator, read the server logs during the phone test", "Installed the app on my phone, ran the demo steps, reported what happened"],
+    ["Debugging", "Found the causes of the problems in section 9 from logs and raw packet timings", "Decided which fixes to keep, confirmed them on the phone"],
+    ["Measurement and report", "Wrote the measurement scripts, produced the tables and figures, drafted these documents", "Chose what to measure and how to present it, reviewed the text"],
+  ], [18, 44, 38]),
+  p("Most of the code was written by the agent, and the agent also drafted this report. Sections 3 to 7 cover the parts that carry the networking ideas: why the payload is 1316 bytes, why messages need a length prefix, how the reorder buffer tells loss from reordering, why NACK goes over TCP, what the TCP loss model does and does not show, how pacing works, and the jitter formula."),
+  p("The agent checked its work by running it: the end-to-end test after each server change, the app in an emulator, and the server logs during my phone test. The retransmission flood in section 9 was found this way. The agent read the dashboard data from the phone test and noticed that the server was sending four times the video bitrate."),
+
+  h1("12. Summary"),
+  bullet("TCP and UDP gave the same result on a good network. The difference appears only when the network is impaired."),
+  bullet("With loss and delay together, TCP keeps every byte but cannot keep up with real time. UDP keeps up but loses data."),
+  bullet("Selective retransmission on top of UDP removed random loss at a cost about equal to the loss rate, without slowing the stream."),
+  bullet("When the bandwidth is too small, neither protocol nor retransmission helps. The sender has to reduce what it sends."),
+  bullet("A mechanism that answers loss by sending more needs a limit, and its timing has to follow the network. Both showed up in this project as results that looked wrong at first."),
+];
+
+build(doc, process.argv[3], "NetStream Lab - Technical Report");
