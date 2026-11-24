@@ -5,16 +5,28 @@ const REPO = "https://github.com/ray1203/netstream-lab";
 const doc = [
   titleBlock("NetStream Lab", "Technical Report: Streaming the Same Video over TCP and UDP", [
     "Computer Networks, Assignment 4",
-    "Name / Student ID: (fill in)",
+    process.env.NSL_AUTHOR || "Name / Student ID: (fill in)",
     "Repository: " + REPO,
   ]),
 
-  h1("1. Goal"),
+  h1("1. Background and goal"),
+  h2("1.1 Background"),
+  p("I started from a problem I actually had. I have a lot of videos on my PC and when I watch them on my phone with VLC it buffers a lot. The reason is that VLC sends the original file without converting it, so the bitrate is sometimes too high for the Wi-Fi. Jellyfin and Plex already fix this by transcoding on the server, so making the same thing again did not seem useful. So for this assignment I made a smaller streaming program and focused on comparing TCP and UDP with the same video."),
+  h2("1.2 Goal"),
   p("I wanted to make an application where I can see how TCP and UDP behave differently. I chose video streaming because video is affected a lot by packet loss, delay and bandwidth, and these are the things TCP and UDP handle in different ways."),
   p("The program does not use HTTP or a streaming library to send data. The server and the client use a protocol that I defined on TCP and UDP sockets. In this report I explain the protocol, how retransmission and quality control work on UDP, and the measurement results."),
 
+  h2("1.3 Assignment requirements"),
+  table(["Requirement", "In this project"], [
+    ["Use TCP or UDP in the backend", "I used both. Control messages use TCP. Video data uses TCP or UDP depending on the mode. I did not use HTTP or a streaming library for this."],
+    ["Show how the protocol works in a real application", "It is a video streaming app that really plays video on a phone. The dashboard and the app show loss, reordering, retransmission and buffering while it plays, and with the simulator TCP and UDP can be compared in the same network condition (section 8)."],
+    ["Use Agentic AI in development", "I used Claude Code (section 11)."],
+    ["Solve a real problem, can be demonstrated and published", "It started from my own buffering problem. I tested it on my phone over Wi-Fi and the code is on GitHub."],
+  ], [32, 68]),
+
   h1("2. Architecture"),
   figure("architecture.png", "Figure 1. Components and channels"),
+  p("The server and the client use three connections. The control channel (TCP) is for commands and status. The video goes through another TCP connection in TCP mode, or through UDP in UDP mode. The dashboard is a web page served by the server."),
   table(["Component", "Role", "Main file"], [
     ["Transcoder", "Runs ffmpeg to produce H.264 and AAC in an MPEG-TS stream", "`server/transcoder.py`"],
     ["Session / Stream", "One session per client. A stream reads the ffmpeg output, cuts it into packets, paces them and sends them", "`server/app.py`"],
@@ -188,6 +200,10 @@ const doc = [
   bullet("The stall time of the PC client is an estimate and it is wrong when the loss is very high (section 8.5)."),
   bullet("NACK timing does not adapt to jitter (section 9)."),
   bullet("UDP mode has no congestion control except ABR, so it would not be fair to other traffic on a shared network."),
+  bullet("It is only for a home network. There is no login or encryption, and the dashboard shows one client at a time."),
+  bullet("The server address has to be typed in the app. I planned automatic discovery as an optional feature but did not make it."),
+  bullet("When the quality changes, the Android player is restarted and the video pauses for a moment."),
+  bullet("I tested the app on an emulator and on one phone (Galaxy S23 Ultra)."),
 
   h1("11. Use of Agentic AI", true),
   p("I used Claude Code for the whole project. It is an AI coding agent that can read and edit files and run commands. The record by date is in `AI_LOG.md` in the repository. The table below is a summary."),
@@ -208,6 +224,18 @@ const doc = [
   bullet("UDP with NACK removed the random loss. The extra traffic was about the same as the loss rate and the stream was not slowed down."),
   bullet("When the bandwidth was too small nothing helped except lowering the video quality (ABR)."),
   bullet("Retransmission needs a limit, and the NACK timing should depend on jitter. Both were found from results that looked wrong."),
+
+  h1("13. Repository"),
+  p(REPO),
+  table(["Path", "Contents"], [
+    ["`pc/netstream/`", "Server, PC client and the shared protocol code"],
+    ["`pc/tests/e2e.py`", "End-to-end test (server and client over real sockets)"],
+    ["`pc/tools/`", "Measurement and figure scripts"],
+    ["`android/`", "Android app"],
+    ["`PROTOCOL.md`", "Protocol reference"],
+    ["`AI_LOG.md`", "Record of how the AI agent was used"],
+    ["`report/`", "Measurement data, figures and these documents"],
+  ], [30, 70]),
 ];
 
 build(doc, process.argv[3], "NetStream Lab - Technical Report");

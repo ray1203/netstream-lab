@@ -13,3 +13,4 @@ android/.idea/
 android/.kotlin/
 *.iml
 *.apk
+/submit/
