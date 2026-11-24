@@ -21,7 +21,9 @@ const doc = [
   bullet("To build the app: Android Studio, or JDK 17 or later"),
 
   h1("3. Start the server"),
-  code(["cd pc", "python -m netstream.server --media \"D:\\Videos\""]),
+  p("Double-click `start_server.bat`. It asks for the video folder (or you can drag a folder onto the file), starts the server and opens the dashboard in the browser. If ffmpeg is missing it offers to install it."),
+  p("To start it by hand instead:"),
+  code(["cd source\\pc", "python -m netstream.server --media \"D:\\Videos\""]),
   p("`--media` is the folder with the videos. The server prints its IP address and the dashboard address (the text is in Korean, translated here):"),
   code([
     "NetStream Lab server is running",
@@ -33,9 +35,7 @@ const doc = [
   p("When it runs for the first time Windows shows a firewall popup for Python. Allow it, or the phone cannot connect."),
 
   h1("4. Install and use the app"),
-  p("Open the `android` folder in Android Studio and run it, or build the APK:"),
-  code(["cd android", ".\\gradlew.bat assembleDebug"]),
-  p("The APK is in `android/app/build/outputs/apk/debug/`. Copy it to the phone and install it."),
+  p("Copy `NetStreamLab.apk` to the phone and install it. (To build it yourself, open `source/android` in Android Studio, or run `gradlew.bat assembleDebug` in that folder.)"),
   step("Open the app and type the IP address that the server printed. Press connect."),
   step("Choose a video from the list."),
   step("While it plays you can seek, switch between TCP and UDP, turn NACK on or off, and change the quality."),
@@ -70,7 +70,7 @@ const doc = [
 
   h1("7. PC client (optional)"),
   p("There is also a simple PC client that plays the video with ffplay. It is useful for testing without a phone."),
-  code(["cd pc", "python -m netstream.client --host 127.0.0.1 --video 0"]),
+  code(["cd source\\pc", "python -m netstream.client --host 127.0.0.1 --video 0"]),
   p("Commands while it runs: `list`, `play N`, `tcp`, `udp`, `seek S`, `nack on`, `nack off`, `quality NAME`, `stop`, `quit`. With `--no-play` it only prints statistics."),
 
   h1("8. If it does not work"),
