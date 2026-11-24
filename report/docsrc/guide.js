@@ -10,30 +10,30 @@ const doc = [
   ]),
 
   h1("1. What this project is"),
-  p("NetStream Lab streams video files from a PC to a phone. The same video can be sent over TCP or over UDP, and a dashboard shows what the network is doing while it plays: throughput, packet loss, reordering, jitter, round-trip time and how much video the player has buffered."),
-  p("The idea started from a real problem. I have a large video collection on my PC, and watching it on my phone through VLC kept buffering. When I looked into it, the cause was that VLC sends the original file as it is, so the bitrate can be higher than the Wi-Fi can carry. Programs such as Jellyfin and Plex already solve this by transcoding on the server, so I did not try to rebuild them."),
-  p("Instead, I used the same streaming setup to answer a different question: if I send the same video over TCP and over UDP, what is actually different? To make that visible I did not hide the protocols behind an HTTP library. The server and clients talk through a small protocol that I defined directly on top of TCP and UDP sockets."),
+  p("NetStream Lab is a program that streams video files from my PC to my phone. The video can be sent with TCP or with UDP, and there is a dashboard page that shows throughput, packet loss, jitter, RTT and the buffer of the player while the video is playing."),
+  p("I started from a problem I actually had. I have a lot of videos on my PC and when I watch them on my phone with VLC it buffers a lot. The reason is that VLC sends the original file without converting it, so the bitrate is sometimes too high for the Wi-Fi. Jellyfin and Plex already fix this by transcoding on the server, so making the same thing again did not seem useful."),
+  p("So for this assignment I made a smaller streaming program and focused on comparing TCP and UDP with the same video. I did not use an HTTP library for sending. The server and the clients use a simple protocol that I made on top of TCP and UDP sockets."),
 
   h1("2. What it can do"),
-  bullet("**Transcoding server.** The PC server uses ffmpeg to convert any video to H.264 and AAC in real time, at a resolution and bitrate the network can handle."),
-  bullet("**Two transport modes.** Video data goes over a TCP connection or as UDP datagrams. The mode can be switched during playback and the video continues from the same position."),
-  bullet("**Selective retransmission (NACK).** In UDP mode the client can ask the server to resend only the packets that were lost."),
-  bullet("**Automatic quality (ABR).** The server lowers or raises the video quality based on the loss and buffer level the client reports."),
-  bullet("**Network impairment simulator.** The server can add packet loss, delay, jitter and a bandwidth limit on purpose, so the difference between the protocols can be shown without waiting for the Wi-Fi to become bad."),
-  bullet("**Live dashboard.** A web page served by the server draws the statistics every second and has the controls for the demo."),
-  bullet("**Two clients.** An Android app (Kotlin) for watching on the phone, and a small PC client for testing."),
+  bullet("The server converts videos to H.264 and AAC with ffmpeg in real time, so the bitrate is low enough for Wi-Fi."),
+  bullet("Video data can be sent with TCP or UDP. You can switch while watching and it continues from the same position."),
+  bullet("NACK: in UDP mode the client can ask the server to send lost packets again."),
+  bullet("ABR: the server changes the video quality automatically when the client reports loss or an empty buffer."),
+  bullet("A simulator in the server that adds packet loss, delay, jitter or a bandwidth limit. It is needed because on a normal Wi-Fi TCP and UDP look almost the same."),
+  bullet("A dashboard web page with graphs that update every second and buttons for the demo."),
+  bullet("An Android app (Kotlin) and a simple PC client for testing."),
 
   h1("3. How it meets the assignment requirements"),
   table(["Requirement", "How this project meets it"], [
-    ["Use TCP or UDP in the backend", "Both are used. Control messages always go over TCP. Video data goes over TCP or UDP depending on the selected mode. No HTTP or streaming library is used for the transport."],
-    ["Show how the protocol works in a real application", "The application is a working video streamer. The dashboard and the app show loss, reordering, retransmission and buffering live, and the simulator lets the user see how TCP and UDP react to the same network condition."],
-    ["Use Agentic AI in development", "I used Claude Code for planning, protocol design, implementation, debugging and testing. The process is recorded in AI_LOG.md and summarized in the technical report."],
-    ["Solve a real problem, can be demonstrated and published", "It came from my own buffering problem, it runs on a real phone over Wi-Fi, and the code is on GitHub."],
+    ["Use TCP or UDP in the backend", "I used both. Control messages use TCP. Video data uses TCP or UDP depending on the mode. I did not use HTTP or a streaming library for this."],
+    ["Show how the protocol works in a real application", "It is a video streaming app that really plays video on a phone. The dashboard and the app show loss, reordering, retransmission and buffering while it plays, and with the simulator you can compare TCP and UDP in the same network condition."],
+    ["Use Agentic AI in development", "I used Claude Code. How I used it is written in AI_LOG.md and in section 11 of the technical report."],
+    ["Solve a real problem, can be demonstrated and published", "It started from my own buffering problem. I tested it on my phone over Wi-Fi and the code is on GitHub."],
   ], [30, 70]),
 
   h1("4. System overview"),
   figure("architecture.png", "Figure 1. The server, the three channels and the client"),
-  p("There are three connections between the server and a client. The control channel is a TCP connection that carries commands and status as JSON messages. The video itself goes over a second TCP connection in TCP mode, or over UDP in UDP mode. The dashboard is a separate web page that is only opened on the PC."),
+  p("The server and the client use three connections. The control channel (TCP) is for commands and status, in JSON. The video goes through another TCP connection in TCP mode, or through UDP in UDP mode. The dashboard is a web page that I open on the PC."),
 
   h1("5. Requirements", true),
   table(["Part", "What is needed"], [
@@ -46,7 +46,7 @@ const doc = [
   h1("6. Running the server"),
   p("Open a terminal in the `pc` folder and start the server with the folder that contains the videos."),
   code(["cd pc", "python -m netstream.server --media \"D:\\Videos\""]),
-  p("The server prints the address to type into the phone and the address of the dashboard. The first time it runs, Windows asks whether Python may accept connections. This must be allowed, otherwise the phone cannot connect."),
+  p("The server prints its IP address (to type in the phone) and the dashboard address. When it runs for the first time Windows shows a firewall popup for Python. You have to allow it or the phone cannot connect."),
   code([
     "NetStream Lab server is running",
     "  videos      12",
@@ -63,7 +63,7 @@ const doc = [
   ], [38, 62]),
 
   h1("7. The dashboard"),
-  p("Open `http://127.0.0.1:9080` in a browser on the PC. The top row shows the current state, the four charts show the last two minutes, and the panel on the right has the controls."),
+  p("Open `http://127.0.0.1:9080` in a browser on the PC. The boxes at the top show the current values, the four graphs show the last 2 minutes, and the controls are on the right side."),
   figure("dashboard.jpg", "Figure 2. Dashboard during a demo run. From left to right in the charts: TCP without impairment, TCP with 5% loss and 100 ms delay (the buffer falls to zero), UDP (the rate recovers but loss appears), and UDP with NACK (the final loss returns to zero). The interface text is in Korean.", 600, [799, 544]),
   table(["Control", "What it does"], [
     ["TCP / UDP buttons", "Ask the client to switch the transport mode. Playback continues from the same position."],
@@ -86,11 +86,11 @@ const doc = [
     ["app_tcp.png", "Figure 4. Playing over TCP"],
     ["app_udp_nack.png", "Figure 5. UDP with NACK"],
   ], 172),
-  p("The playback screen has the video on top and the controls below it: a seek bar, the TCP and UDP buttons, the NACK switch and the quality menu. The card at the bottom shows the same statistics that the client reports to the server. In Figure 5 the app is receiving over UDP with 5% simulated loss: 5.9% of packets were lost before retransmission and 0.0% after."),
+  p("On the playback screen the video is at the top. Below it there are the seek bar, TCP and UDP buttons, the NACK switch and the quality menu. The box at the bottom shows the statistics that the app sends to the server. Figure 5 was taken in UDP mode with 5% loss in the simulator. The loss was 5.9% and after retransmission it was 0.0%."),
   p("In the Android emulator the PC is reached at the address `10.0.2.2`."),
 
   h1("9. The PC test client", true),
-  p("The PC client uses the same protocol as the app and plays the video in an ffplay window. I used it to test the protocol before the app existed, and for the measurements."),
+  p("The PC client uses the same protocol as the app and plays the video with ffplay. It was used to test the protocol before the app was made, and also for the measurements."),
   code(["cd pc", "python -m netstream.client --host 127.0.0.1 --video 0"]),
   p("While it runs, it prints one line of statistics per second and accepts these commands:"),
   table(["Command", "Meaning"], [
@@ -105,13 +105,13 @@ const doc = [
   p("With `--no-play` the client does not open a player and only prints statistics."),
 
   h1("10. Demo walkthrough"),
-  p("This is the order I use to show the difference between the protocols. Keep the dashboard open on the PC and play a video on the phone."),
-  step("**Play over TCP with no impairment.** Loss is 0% and the buffer stays around 3 seconds."),
-  step("**Press \"5% loss + 100 ms delay\".** TCP still shows 0% loss, but the received rate drops to about 580 kbps, the buffer runs out and the video keeps stopping."),
-  step("**Switch to UDP.** The received rate goes back to normal and playback no longer stops. The loss chart now shows about 5%, and the picture breaks up from time to time."),
-  step("**Turn on NACK.** The lost packets are requested again. Loss before retransmission is still about 5%, but the final loss goes to almost 0% and the picture is clean."),
-  step("**Press \"Normal\", then \"1 Mbps bandwidth\", with the quality fixed at 720p.** The video needs about 2.9 Mbps, so around 65% of the packets are dropped and the picture freezes. NACK does not help here."),
-  step("**Set the quality to automatic.** Within a few seconds the server drops to 240p, the loss goes to 0% and playback continues."),
+  p("This is the order for the demo. Open the dashboard on the PC and play a video on the phone."),
+  step("Play over TCP with no impairment. Loss is 0% and the buffer stays around 3 seconds."),
+  step("Press \"5% loss + 100 ms delay\". TCP still shows 0% loss but the speed goes down to about 580 kbps. The buffer becomes empty and the video keeps stopping."),
+  step("Switch to UDP. The speed goes back to normal and the video does not stop anymore. But now the loss graph shows about 5% and the picture is broken sometimes."),
+  step("Turn on NACK. Lost packets are sent again. The loss before retransmission is still about 5% but the final loss is almost 0% and the picture is clean again."),
+  step("Press \"Normal\", then \"1 Mbps bandwidth\", with the quality fixed at 720p. The video needs about 2.9 Mbps so about 65% of packets are dropped and the picture freezes. NACK does not help in this case."),
+  step("Set the quality to automatic. After a few seconds the server changes to 240p, the loss becomes 0% and the video plays again."),
 
   h1("11. If something does not work"),
   table(["Problem", "What to check"], [
@@ -123,12 +123,12 @@ const doc = [
   ], [34, 66]),
 
   h1("12. Limitations"),
-  bullet("It is meant for a home network. There is no login and no encryption."),
+  bullet("It is only for a home network. There is no login or encryption."),
   bullet("The dashboard shows one client at a time."),
-  bullet("The server address has to be typed in. Automatic discovery was planned as optional and left out."),
+  bullet("You have to type the server address. I planned automatic discovery as an optional feature but did not make it."),
   bullet("When the quality changes, the Android player is restarted and the video pauses for a moment."),
   bullet("I tested the app on an emulator and on one phone (Galaxy S23 Ultra)."),
-  p("The technical report explains how each part works and shows the measurements."),
+  p("How each part works and the measurement results are in the technical report."),
 
   h1("13. Source code"),
   link(REPO, REPO),
