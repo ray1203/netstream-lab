@@ -1,6 +1,6 @@
 # NetStream Lab 작업 노트
 
-새 세션에서 이어서 작업할 때 먼저 읽을 것. 마지막 갱신: 2026-11-20
+새 세션에서 이어서 작업할 때 먼저 읽을 것. 마지막 갱신: 2026-11-25
 
 ## 뭐 하는 프로젝트인지
 
@@ -8,7 +8,7 @@
 과제 조건: (1) TCP 또는 UDP 사용 (2) 프로토콜이 실제로 어떻게 동작하는지 보여줄 것 (3) Agentic AI 활용 (4) 시연 + GitHub 공개 가능.
 원래 기획은 `기획서.md`, 마감은 과제 공지일로부터 2주.
 
-저장소: https://github.com/ray1203/netstream-lab (지금은 비공개, 제출할 때 공개로 바꿔야 함)
+저장소: https://github.com/ray1203/netstream-lab (지금은 비공개)
 
 ## 현재 상태
 
@@ -34,7 +34,7 @@
   - 사용자가 이름/학번 채우고 내용 검토해야 함. AI가 초안을 썼다는 것도 보고서 11절에 적혀 있음
   - 그림: `python -m tools.figures` (matplotlib 필요) -> `report/figures/`
   - 문서 다시 만들기: `report/docsrc/`에서 `npm install docx` 후 `node guide.js ../figures ../NetStreamLab_1_User_Guide.docx`, `node tech.js ../figures ../NetStreamLab_2_Technical_Report.docx`
-  - 이름/학번은 저장소 문서엔 안 넣음(공개될 거라서). 빌드할 때 환경변수 `NSL_AUTHOR="이름 (학번)"`를 주면 들어감
+  - 이름/학번은 저장소 문서엔 안 넣음(공개될 거라서). 빌드할 때 환경변수 `NSL_AUTHOR="이름 (학번)"`을 주면 첫 쪽에 들어감. 이름/학번은 이 파일을 포함해 저장소 어디에도 적지 말 것
   - 제출용 폴더: `submit/NetStreamLab_<학번>_<이름>/` + 같은 이름 zip (gitignore됨). 문서 2개(이름 들어간 버전), APK, `source/`(git archive로 뽑은 pc, android, md 3개 + 측정 CSV). 코드나 문서를 고치면 이 폴더도 다시 만들어야 함
   - 측정을 다시 하면 tech.js 안의 표 숫자는 손으로 고쳐야 함 (CSV에서 자동으로 안 읽음)
   - 렌더링 확인: 이 PC엔 LibreOffice/pdftoppm이 없어서 Word COM으로 쪽을 이미지로 뽑아 확인했음
@@ -146,7 +146,4 @@ cd android
 
 ## 커밋 이력
 
-- `35e19c4` 첫 구현
-- `65e2416` 주석, 문서 정리
-- `76a193a` NACK 재전송량 제한
-- `10610f6` 폰 테스트 결과 기록
+`git log` 참고

@@ -1,0 +1,8 @@
+{
+  "name": "netstream-lab-docs",
+  "private": true,
+  "description": "Builds the two Word reports",
+  "dependencies": {
+    "docx": "^9.0.0"
+  }
+}

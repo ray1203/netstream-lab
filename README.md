@@ -1,5 +1,17 @@
 # NetStream Lab
 
+Streams video from a PC to an Android phone over TCP or UDP, with a live dashboard that shows how the two protocols behave under packet loss, delay and limited bandwidth. Made for a Computer Networks course assignment. The server is Python (asyncio, no external packages) and the app is Kotlin. The transport is a small protocol written directly on sockets, not HTTP.
+
+![dashboard](report/figures/dashboard.jpg)
+
+- User guide (English): [report/NetStreamLab_1_User_Guide.docx](report/NetStreamLab_1_User_Guide.docx)
+- Technical report with measurements (English): [report/NetStreamLab_2_Technical_Report.docx](report/NetStreamLab_2_Technical_Report.docx)
+- Protocol reference: [PROTOCOL.md](PROTOCOL.md)
+
+The rest of this README is in Korean.
+
+---
+
 컴퓨터네트워크 과제 4. PC에 있는 영상을 폰으로 스트리밍하는 프로그램인데, 전송을 TCP/UDP 중에 골라서 할 수 있고 둘의 차이를 대시보드로 볼 수 있게 만들었다.
 
 원래는 PC 영상을 폰 VLC로 보면 버퍼링이 심해서 시작한 건데, 그 문제 자체는 Jellyfin 같은 게 이미 잘 해결해준다. 그래서 과제는 "같은 영상을 TCP로 보낼 때랑 UDP로 보낼 때 뭐가 다른지"를 직접 보여주는 쪽으로 잡았다. HTTP 라이브러리는 안 쓰고 소켓 위에 프로토콜을 직접 만들었다. (형식은 [PROTOCOL.md](PROTOCOL.md))
@@ -20,7 +32,10 @@ PC 서버 (Python asyncio)                      클라이언트 (안드로이드
 - `pc/netstream/server/` : 서버. `app.py`가 본체고 나머지는 ffmpeg 실행(`transcoder.py`), 열화 시뮬레이터(`impair.py`), ABR(`abr.py`), 대시보드(`dashboard.py`)
 - `pc/netstream/client/` : PC에서 돌려보는 테스트 클라이언트
 - `pc/tests/e2e.py` : 통합 테스트
+- `pc/tools/` : 측정이랑 그래프 만드는 스크립트 (그래프만 matplotlib 필요)
 - `android/` : 안드로이드 앱 (Kotlin, Compose, Media3)
+- `report/` : 보고서 2개(docx), 측정 데이터(csv), 그림
+- `start_server.bat` : 서버 실행용 배치파일
 
 ## 실행 방법
 
@@ -30,7 +45,9 @@ Python 3.10 이상, ffmpeg 필요. pip로 깔 건 없다.
 winget install Gyan.FFmpeg
 ```
 
-서버:
+제일 쉬운 건 `start_server.bat` 더블클릭. 영상 폴더를 물어보고 서버를 띄운 다음 대시보드를 브라우저로 열어준다. (보고서에 나오는 `source\pc` 경로는 제출용 압축파일 기준이고, 이 저장소에서는 그냥 `pc`다)
+
+직접 띄우려면:
 
 ```
 cd pc

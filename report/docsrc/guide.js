@@ -5,7 +5,7 @@ const REPO = "https://github.com/ray1203/netstream-lab";
 const doc = [
   titleBlock("NetStream Lab", "User Guide", [
     "Computer Networks, Assignment 4",
-    process.env.NSL_AUTHOR || "Name / Student ID: (fill in)",
+    ...(process.env.NSL_AUTHOR ? [process.env.NSL_AUTHOR] : []),
     "Repository: " + REPO,
   ]),
 
