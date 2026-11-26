@@ -1,119 +1,122 @@
 # NetStream Lab
 
-Streams video from a PC to an Android phone over TCP or UDP, with a live dashboard that shows how the two protocols behave under packet loss, delay and limited bandwidth. Made for a Computer Networks course assignment. The server is Python (asyncio, no external packages) and the app is Kotlin. The transport is a small protocol written directly on sockets, not HTTP.
+Streams video from a PC to an Android phone over TCP or UDP, with a live dashboard that shows how the two protocols behave under packet loss, delay and limited bandwidth. Made for Assignment 4 of a Computer Networks course.
+
+I started this because watching videos from my PC on my phone with VLC kept buffering. Jellyfin and similar programs already solve that, so for the assignment I focused on a different question: what actually changes when the same video goes over TCP instead of UDP? No HTTP library is used for the transport. The server and clients talk through a small protocol written directly on TCP and UDP sockets (see [PROTOCOL.md](PROTOCOL.md)).
 
 ![dashboard](report/figures/dashboard.jpg)
 
-- User guide (English): [report/NetStreamLab_1_User_Guide.docx](report/NetStreamLab_1_User_Guide.docx)
-- Technical report with measurements (English): [report/NetStreamLab_2_Technical_Report.docx](report/NetStreamLab_2_Technical_Report.docx)
-- Protocol reference: [PROTOCOL.md](PROTOCOL.md)
+Documents:
 
-The rest of this README is in Korean.
+- [User guide](report/NetStreamLab_1_User_Guide.docx): what it does and how to use it
+- [Technical report](report/NetStreamLab_2_Technical_Report.docx): design, measurements, use of AI
+- [PROTOCOL.md](PROTOCOL.md): message and packet formats
 
----
-
-컴퓨터네트워크 과제 4. PC에 있는 영상을 폰으로 스트리밍하는 프로그램인데, 전송을 TCP/UDP 중에 골라서 할 수 있고 둘의 차이를 대시보드로 볼 수 있게 만들었다.
-
-원래는 PC 영상을 폰 VLC로 보면 버퍼링이 심해서 시작한 건데, 그 문제 자체는 Jellyfin 같은 게 이미 잘 해결해준다. 그래서 과제는 "같은 영상을 TCP로 보낼 때랑 UDP로 보낼 때 뭐가 다른지"를 직접 보여주는 쪽으로 잡았다. HTTP 라이브러리는 안 쓰고 소켓 위에 프로토콜을 직접 만들었다. (형식은 [PROTOCOL.md](PROTOCOL.md))
-
-## 구조
+## How it works
 
 ```
-PC 서버 (Python asyncio)                      클라이언트 (안드로이드 앱 / PC 테스트용)
- 영상 -> ffmpeg (H.264+AAC, MPEG-TS)
+PC server (Python asyncio)                    Client (Android app / PC test client)
+ video -> ffmpeg (H.264+AAC, MPEG-TS)
           |
-          |-- TCP 9000  제어 채널     <---->  목록, 재생, 탐색, 화질, NACK, 통계
-          |-- TCP 9001  데이터(TCP)   ----->  플레이어
-          |-- UDP 9002  데이터(UDP)   ----->  순서 맞춤 -> 플레이어
-          `-- HTTP 9080 대시보드 (브라우저)
+          |-- TCP 9000  control       <---->  list, play, seek, quality, NACK, stats
+          |-- TCP 9001  data (TCP)    ----->  player
+          |-- UDP 9002  data (UDP)    ----->  reorder -> player
+          `-- HTTP 9080 dashboard (browser)
 ```
 
-- `pc/netstream/protocol.py` : 메시지/패킷 형식
-- `pc/netstream/server/` : 서버. `app.py`가 본체고 나머지는 ffmpeg 실행(`transcoder.py`), 열화 시뮬레이터(`impair.py`), ABR(`abr.py`), 대시보드(`dashboard.py`)
-- `pc/netstream/client/` : PC에서 돌려보는 테스트 클라이언트
-- `pc/tests/e2e.py` : 통합 테스트
-- `pc/tools/` : 측정이랑 그래프 만드는 스크립트 (그래프만 matplotlib 필요)
-- `android/` : 안드로이드 앱 (Kotlin, Compose, Media3)
-- `report/` : 보고서 2개(docx), 측정 데이터(csv), 그림
-- `start_server.bat` : 서버 실행용 배치파일
+- `pc/netstream/protocol.py`: message and packet format
+- `pc/netstream/server/`: the server. `app.py` is the core, plus ffmpeg (`transcoder.py`), the impairment simulator (`impair.py`), ABR (`abr.py`) and the dashboard (`dashboard.py`)
+- `pc/netstream/client/`: PC test client
+- `pc/tests/e2e.py`: end-to-end test
+- `pc/tools/`: measurement and figure scripts (figures need matplotlib)
+- `android/`: Android app (Kotlin, Compose, Media3)
+- `report/`: the two reports (docx), measurement data (csv) and figures
+- `start_server.bat`: double-click launcher for the server
 
-## 실행 방법
+## Running it
 
-Python 3.10 이상, ffmpeg 필요. pip로 깔 건 없다.
+You need Python 3.10 or later and ffmpeg. Nothing to install with pip.
 
 ```
 winget install Gyan.FFmpeg
 ```
 
-제일 쉬운 건 `start_server.bat` 더블클릭. 영상 폴더를 물어보고 서버를 띄운 다음 대시보드를 브라우저로 열어준다. (보고서에 나오는 `source\pc` 경로는 제출용 압축파일 기준이고, 이 저장소에서는 그냥 `pc`다)
+The easiest way is to double-click `start_server.bat`. It asks for the video folder, starts the server and opens the dashboard in the browser. (The reports say `source\pc` because they follow the layout of the submitted zip. In this repo it is just `pc`.)
 
-직접 띄우려면:
+To start the server by hand:
 
 ```
 cd pc
 python -m netstream.server --media "D:\Videos"
 ```
 
-켜면 서버 IP랑 대시보드 주소(http://127.0.0.1:9080)가 나온다. 처음 실행할 때 방화벽 창이 뜨면 허용해야 폰에서 접속된다.
+It prints the server IP and the dashboard address (http://127.0.0.1:9080). Allow Python through the Windows firewall the first time, otherwise the phone can't connect. The console output is in Korean.
 
-PC 클라이언트:
+PC test client:
 
 ```
 cd pc
 python -m netstream.client --host 127.0.0.1 --video 0
 ```
 
-ffplay 창이 뜨고 터미널에 1초마다 통계가 찍힌다. 실행 중에 `tcp`, `udp`, `seek 30`, `nack on`, `quality auto` 같은 명령을 칠 수 있다. `--no-play` 붙이면 재생 없이 통계만 본다.
+It plays in an ffplay window and prints stats every second. You can type commands like `tcp`, `udp`, `seek 30`, `nack on`, `quality auto` while it runs. With `--no-play` it only prints stats.
 
-안드로이드 앱은 Android Studio에서 `android` 폴더를 열거나
+Android app: open the `android` folder in Android Studio, or build it with
 
 ```
 cd android
 .\gradlew.bat assembleDebug
 ```
 
-로 빌드하면 `app/build/outputs/apk/debug/`에 apk가 나온다. 앱에서 서버 IP 입력하면 끝. 폰이랑 PC가 같은 와이파이여야 한다. (에뮬레이터면 10.0.2.2)
+The apk ends up in `app/build/outputs/apk/debug/`. Type the server IP in the app. The phone and the PC have to be on the same Wi-Fi (on the emulator use `10.0.2.2`).
 
-테스트:
+Tests:
 
 ```
 cd pc
 python -m tests.e2e
 ```
 
-## 시연 순서
+## Demo
 
-대시보드 띄워놓고 폰으로 재생하면서 진행.
+Keep the dashboard open on the PC and play a video on the phone.
 
-1. TCP로 재생. 손실 0%, 버퍼 3초 정도로 유지됨
-2. 대시보드에서 "손실 5% + 지연 100ms" 누름. TCP는 580kbps 정도로 떨어지고 버퍼가 0이 돼서 멈춘다
-3. UDP로 바꿈. 속도는 유지되고 안 끊기는데 손실률 5%가 찍히고 화면이 가끔 깨진다
-4. NACK 켬. 손실난 패킷이 복구돼서 최종 손실이 거의 0%
-5. 열화를 "정상"으로 돌리고 "대역폭 1Mbps" + 화질 자동. 720p에서 240p로 내려가면서 손실이 없어진다
+1. Play over TCP. 0% loss, about 3 seconds of buffer.
+2. Press "5% loss + 100 ms delay" on the dashboard. TCP drops to about 580 kbps, the buffer runs out and the video keeps stopping.
+3. Switch to UDP. The rate is back to normal and it doesn't stop, but 5% loss shows up and the picture breaks sometimes.
+4. Turn on NACK. Lost packets are recovered and the final loss is almost 0%.
+5. Set the impairment back to normal, press "1 Mbps bandwidth" and set quality to auto. It goes from 720p down to 240p and the loss goes away.
 
-## 구현하면서 정한 것들
+## Results
 
-**패킷 크기 1316바이트**
-MPEG-TS 패킷이 188바이트 고정이라 7개 묶으면 1316. 여기에 내 헤더 17 + UDP 8 + IP 20 해도 1361이라 MTU 1500 안에 들어간다. 그래서 IP 단편화가 안 생기고, 패킷 하나가 없어져도 TS 패킷 경계는 안 깨진다.
+Measured on one PC over loopback, 720p (about 2.9 Mbps), 30 seconds per run. Full tables and graphs are in the technical report.
 
-**전송 속도**
-ffmpeg는 그냥 최대 속도로 인코딩하게 두고, 서버가 TS 안에 있는 PCR 값을 읽어서 실시간보다 3초 앞서게만 보낸다. 이 3초가 클라이언트 버퍼가 된다. 처음에 3초치를 한번에 쏟아부으니까 대역폭 제한 걸었을 때 그것 때문에 손실이 나서, 2배속까지만 보내게 고쳤다.
+| Condition | TCP | UDP | UDP + NACK |
+|---|---|---|---|
+| 5% loss | 2832 kbps, 0% loss | 2732 kbps, 4.94% loss | 2885 kbps, 0% loss |
+| 5% loss + 100 ms delay | 585 kbps, stalled 20 of 30 s | 2706 kbps, 5.13% loss | 2879 kbps, 0% loss |
+| 1 Mbps limit | stalled 19 of 30 s | 64.7% loss | 66.5% loss |
 
-**UDP 수신**
-seq 번호 보고 빈자리를 찾는다. NACK 꺼져 있으면 60ms만 기다렸다가 건너뛰고, 켜져 있으면 빈 번호를 제어 채널(TCP)로 보내서 다시 받는다(최대 0.6초 대기). TCP가 해주는 재전송을 필요한 만큼만 직접 만든 셈.
+## Some design choices
 
-**ABR**
-클라이언트가 1초마다 손실률/버퍼/수신속도를 보고한다. 2번 연속 안 좋으면 수신속도의 70%에 맞는 화질로 내리고, 10번 연속 괜찮으면 한 단계 올린다. 올렸는데 금방 다시 내려오면 다음엔 2배 더 기다린다.
+**1316-byte payload.** An MPEG-TS packet is always 188 bytes, and 7 of them are 1316. With my 17-byte header, UDP (8) and IP (20) it's 1361 bytes, under the 1500-byte MTU, so there's no IP fragmentation. Losing one UDP packet also never breaks the TS packet boundaries.
 
-## 한계 / 주의
+**Pacing.** ffmpeg encodes as fast as it can. The server reads the PCR clock inside the TS stream and only sends up to 3 seconds ahead of real time, which becomes the client's buffer. At first it sent those 3 seconds all at once, which caused loss on its own under a bandwidth limit, so now it catches up at 2x speed at most.
 
-- TCP 모드의 손실은 진짜 손실이 아니다. 앱에서는 TCP 세그먼트를 버릴 수가 없고 버려도 커널이 재전송해서 안 보인다. 그래서 손실 났을 때의 결과(재전송 기다리느라 뒤가 막히는 것 + 혼잡제어로 처리량 줄어드는 것)만 모델로 넣었다. 처리량은 Mathis 공식 `1.22 * MSS / (RTT * sqrt(p))`. UDP 쪽은 진짜로 버린다.
-- 랜덤 손실은 화질을 낮춰도 그대로라서 ABR로는 해결이 안 된다. 이건 NACK로 해결하는 게 맞고, ABR은 대역폭이 모자랄 때 의미가 있다.
-- 안드로이드에서 화질이 바뀔 때 플레이어를 다시 준비해서 잠깐 멈춘다.
-- 윈도우 타이머 때문에 시뮬레이터 지연이 15ms 정도 오차가 있다.
-- 서버 자동 찾기, 로그인, 여러 명 동시 접속은 안 만들었다.
-- 안드로이드 앱은 에뮬레이터(API 27)랑 실제 폰(갤럭시 S23 울트라, 학교 와이파이)에서 확인했다. 다른 기기는 안 해봄.
+**UDP receiving.** The client finds holes from the sequence numbers. Without NACK it waits 60 ms and skips. With NACK it sends the missing numbers over the control channel (TCP) and waits up to 0.6 s for the resend. Basically the part of TCP's retransmission that's actually needed, done by hand. Retransmission is capped at 25% of the data rate. Without that cap, a phone test under a 1 Mbps limit made the server send 12 Mbps of resends.
 
-## AI 사용
+**ABR.** The client reports loss, buffer and received rate every second. Two bad reports in a row and the server drops to the quality that fits 70% of the received rate. Ten good ones and it goes up one step. If it has to come back down soon after going up, it waits twice as long next time.
 
-개발에 Claude Code를 썼다. 과정은 [AI_LOG.md](AI_LOG.md)에 정리.
+## Limitations
+
+- Loss in TCP mode isn't real loss. An app can't drop a TCP segment, and if one is lost the kernel resends it without the app noticing. So TCP mode only models the effects: head-of-line blocking while waiting for the resend, and lower throughput from congestion control using the Mathis formula `1.22 * MSS / (RTT * sqrt(p))`. UDP mode really drops packets.
+- Random loss doesn't go away when quality goes down, so ABR doesn't help there. That's what NACK is for. ABR helps when bandwidth is the problem.
+- With large jitter (50 ms), NACK asks for packets that were only late, not lost. Not fixed yet.
+- The Android player restarts when quality changes, so the video pauses briefly.
+- The simulator's delay can be off by about 15 ms because of the Windows timer.
+- No server discovery, login or multiple viewers.
+- Tested on an emulator (API 27) and one real phone (Galaxy S23 Ultra on campus Wi-Fi).
+
+## Use of AI
+
+I used Claude Code (an AI coding agent) for most of the implementation, testing and the first drafts of the documents. What I asked for and what came out of it is recorded in [AI_LOG.md](AI_LOG.md) (in Korean) and summarized in section 11 of the technical report.
