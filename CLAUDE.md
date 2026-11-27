@@ -8,7 +8,7 @@
 과제 조건: (1) TCP 또는 UDP 사용 (2) 프로토콜이 실제로 어떻게 동작하는지 보여줄 것 (3) Agentic AI 활용 (4) 시연 + GitHub 공개 가능.
 원래 기획은 `기획서.md`, 마감은 과제 공지일로부터 2주.
 
-저장소: https://github.com/ray1203/netstream-lab (지금은 비공개)
+저장소: https://github.com/ray1203/netstream-lab (공개)
 
 ## 현재 상태
 
@@ -38,7 +38,9 @@
   - 제출용 폴더: `submit/NetStreamLab_<학번>_<이름>/` + 같은 이름 zip (gitignore됨). 문서 2개(이름 들어간 버전), APK, `source/`(git archive로 뽑은 pc, android, md 3개 + 측정 CSV). 코드나 문서를 고치면 이 폴더도 다시 만들어야 함
   - 측정을 다시 하면 tech.js 안의 표 숫자는 손으로 고쳐야 함 (CSV에서 자동으로 안 읽음)
   - 렌더링 확인: 이 PC엔 LibreOffice/pdftoppm이 없어서 Word COM으로 쪽을 이미지로 뽑아 확인했음
-- [ ] 제출 전 저장소 공개 전환: `gh repo edit ray1203/netstream-lab --visibility public --accept-visibility-change-consequences`
+- [x] 저장소 공개 전환 (11/27 확인 시 이미 공개)
+- [x] GitHub Release v1.0에 APK 올림 (11/27). 앱을 고치면 새로 빌드해서 Release에 다시 올릴 것 (`gh release upload v1.0 <apk> --clobber`, 파일명 NetStreamLab.apk 유지. README의 다운로드 링크가 이 이름을 씀)
+- [ ] 과제 제출: 저장소 링크 + 스크린샷 1장 (공지 기준). zip은 예비용
 - [ ] 사용자가 `AI_LOG.md` 끝의 "내가 따로 공부해야 할 것" 항목들 직접 설명할 수 있게 준비
 - [ ] (선택) 긴 실제 영상으로 테스트. 지금까지는 60초짜리 테스트 패턴만 씀
 - [ ] (선택) 아래 "알려진 문제" 수정

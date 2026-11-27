@@ -61,7 +61,7 @@ python -m netstream.client --host 127.0.0.1 --video 0
 
 It plays in an ffplay window and prints stats every second. You can type commands like `tcp`, `udp`, `seek 30`, `nack on`, `quality auto` while it runs. With `--no-play` it only prints stats.
 
-Android app: open the `android` folder in Android Studio, or build it with
+Android app: the built apk is on the [Releases page](https://github.com/ray1203/netstream-lab/releases/latest) ([direct download](https://github.com/ray1203/netstream-lab/releases/latest/download/NetStreamLab.apk)). Copy it to the phone and install it. To build it yourself, open the `android` folder in Android Studio, or run
 
 ```
 cd android
